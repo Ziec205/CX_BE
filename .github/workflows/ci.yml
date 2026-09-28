@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build
+      # Integration test tự chạy MongoDB replica set tạm (EphemeralMongo).
+      - run: dotnet test --no-build --logger "trx;LogFileName=results.trx" --logger "console;verbosity=normal"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: be-test-results
+          path: tests/**/TestResults/*.trx

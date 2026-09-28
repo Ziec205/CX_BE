@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: chamxanh-api
+    runtime: docker
+    region: singapore
+    plan: standard            # không dùng free: free ngủ sau 15 phút, làm chết job nền và SignalR (tài liệu 06 §1)
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: ConnectionStrings__Mongo
+        sync: false           # connection string MongoDB Atlas (replica set, cần cho transaction)
+      - key: Mongo__Database
+        value: chamxanh
+      - key: Auth__JwtKey
+        generateValue: true
+      - key: Security__DataKey
+        sync: false           # base64 của 32 byte ngẫu nhiên — mất khóa là mất dữ liệu CCCD đã mã hóa, phải sao lưu an toàn
+      - key: Security__HmacKey
+        sync: false           # base64, không đổi sau khi đã có dữ liệu
+      - key: Payments__WebhookSecret
+        sync: false
+      - key: Admin__BootstrapUsername
+        sync: false
+      - key: Admin__BootstrapPassword
+        sync: false           # chỉ dùng cho lần khởi động đầu tiên; bật 2FA ngay sau đó
+      - key: Listings__LaunchDate
+        sync: false           # ngày ra mắt (ISO 8601): tin đăng hộ trước ngày này tính hạn từ ngày ra mắt
+      - key: Cors__Origins__0
+        value: https://chamxanh.vn
+      - key: Cors__Origins__1
+        value: https://admin.chamxanh.vn
