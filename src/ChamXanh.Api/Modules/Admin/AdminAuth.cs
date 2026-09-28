@@ -30,6 +30,8 @@ public class AdminOptions
     public bool Require2fa { get; set; } = true;
     public string? BootstrapUsername { get; set; }
     public string? BootstrapPassword { get; set; }
+    /// <summary>Chỉ bật ở Development: cho tài khoản bootstrap dùng mật khẩu ngắn (vd admin/123) để thử nhanh. Production luôn tắt.</summary>
+    public bool AllowWeakBootstrapPassword { get; set; }
 }
 
 public record AdminLoginRequest(string Username, string Password, string? TotpCode);
@@ -52,15 +54,16 @@ public class AdminAuthService(IMongoDatabase db, TokenService tokens, AdminOptio
             logger.LogWarning("Chưa có tài khoản admin nào. Đặt Admin:BootstrapUsername/BootstrapPassword để tạo Super Admin đầu tiên.");
             return;
         }
-        await CreateAsync(new CreateAdminRequest(options.BootstrapUsername, "Super Admin", options.BootstrapPassword, [AdminRoles.SuperAdmin]));
+        await CreateAsync(new CreateAdminRequest(options.BootstrapUsername, "Super Admin", options.BootstrapPassword, [AdminRoles.SuperAdmin]),
+            skipPasswordPolicy: options.AllowWeakBootstrapPassword);
         logger.LogWarning("Đã tạo Super Admin '{User}'. Hãy bật 2FA và đổi mật khẩu ngay.", options.BootstrapUsername);
     }
 
-    public async Task<AdminUser> CreateAsync(CreateAdminRequest req, CancellationToken ct = default)
+    public async Task<AdminUser> CreateAsync(CreateAdminRequest req, CancellationToken ct = default, bool skipPasswordPolicy = false)
     {
         var unknown = req.Roles.Where(r => !AdminRoles.Permissions.ContainsKey(r)).ToList();
         if (unknown.Count > 0) throw new DomainException("UNKNOWN_ROLE", $"Vai trò không tồn tại: {string.Join(", ", unknown)}");
-        if (req.Password.Length < 12) throw new DomainException("WEAK_PASSWORD", "Mật khẩu admin tối thiểu 12 ký tự");
+        if (!skipPasswordPolicy && req.Password.Length < 12) throw new DomainException("WEAK_PASSWORD", "Mật khẩu admin tối thiểu 12 ký tự");
         var admin = new AdminUser
         {
             Username = req.Username.Trim().ToLowerInvariant(), DisplayName = req.DisplayName,

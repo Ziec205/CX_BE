@@ -92,7 +92,7 @@ public class IdentityApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     [Fact]
     public async Task Admin_wrong_password_rejected_and_member_token_cannot_reach_admin()
     {
-        var res = await Anonymous().PostAsJsonAsync("/api/admin/auth/login", new { username = "superadmin", password = "sai-mat-khau" });
+        var res = await Anonymous().PostAsJsonAsync("/api/admin/auth/login", new { username = "admin", password = "sai-mat-khau" });
         Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
         var (member, _) = await Member();
         Assert.Equal(HttpStatusCode.Forbidden, (await member.GetAsync("/api/admin/users")).StatusCode);
@@ -118,11 +118,11 @@ public class AdminTwoFactorTests(MongoFixture mongo) : ApiTestBase(mongo)
         var code = new OtpNet.Totp(OtpNet.Base32Encoding.ToBytes(secret)).ComputeTotp();
         (await super.PostAsJsonAsync("/api/admin/auth/2fa/enable", new { code })).EnsureSuccessStatusCode();
 
-        var noCode = await Anonymous().PostAsJsonAsync("/api/admin/auth/login", new { username = "superadmin", password = "dev-superadmin-password" });
+        var noCode = await Anonymous().PostAsJsonAsync("/api/admin/auth/login", new { username = "admin", password = "123" });
         Assert.Equal(HttpStatusCode.Unauthorized, noCode.StatusCode);
 
         var login = await (await Anonymous().PostAsJsonAsync("/api/admin/auth/login",
-            new { username = "superadmin", password = "dev-superadmin-password", totpCode = new OtpNet.Totp(OtpNet.Base32Encoding.ToBytes(secret)).ComputeTotp() })).EnsureOk();
+            new { username = "admin", password = "123", totpCode = new OtpNet.Totp(OtpNet.Base32Encoding.ToBytes(secret)).ComputeTotp() })).EnsureOk();
         var withMfa = WithToken(login.GetProperty("accessToken").GetString()!);
         Assert.Equal(HttpStatusCode.OK, (await withMfa.GetAsync("/api/admin/price-books")).StatusCode);
     }

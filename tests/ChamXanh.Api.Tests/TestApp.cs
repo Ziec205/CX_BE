@@ -69,7 +69,7 @@ public abstract class ApiTestBase(MongoFixture mongo) : IAsyncLifetime
         return (client, auth.GetProperty("user").GetProperty("id").GetString()!);
     }
 
-    protected Task<HttpClient> SuperAdmin() => AdminLogin("superadmin", "dev-superadmin-password");
+    protected Task<HttpClient> SuperAdmin() => AdminLogin("admin", "123");
 
     protected async Task<HttpClient> AdminLogin(string username, string password)
     {

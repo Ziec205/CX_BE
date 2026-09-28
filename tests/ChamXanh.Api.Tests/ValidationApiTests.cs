@@ -313,6 +313,19 @@ public class ValidationApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     }
 
     [Fact]
+    public async Task Dev_bootstrap_admin_logs_in_with_short_password() => await SuperAdmin();
+
+    [Theory]
+    [InlineData("123")]
+    [InlineData("12345678901")]
+    public async Task New_admins_still_need_twelve_char_passwords(string password)
+    {
+        var super = await SuperAdmin();
+        Assert.Equal("WEAK_PASSWORD", await (await super.PostAsJsonAsync("/api/admin/users",
+            new { username = $"w{Guid.NewGuid():N}"[..10], displayName = "Test", password, roles = new[] { AdminRoles.Editor } })).ErrorCode());
+    }
+
+    [Fact]
     public async Task Public_feature_flags_are_readable() =>
         Assert.True((await (await Anonymous().GetAsync("/api/features")).EnsureOk()).GetProperty("escrow").GetBoolean());
 }

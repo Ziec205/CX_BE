@@ -103,7 +103,10 @@ services.AddStartupTask(async (sp, _) =>
     await sp.GetRequiredService<UserService>().EnsureIndexesAsync();
 });
 
-services.AddSingleton(config.GetSection("Admin").Get<AdminOptions>() ?? new AdminOptions());
+var adminOptions = config.GetSection("Admin").Get<AdminOptions>() ?? new AdminOptions();
+// Mật khẩu admin yếu (vd admin/123) chỉ được phép khi chạy Development.
+if (!builder.Environment.IsDevelopment()) adminOptions.AllowWeakBootstrapPassword = false;
+services.AddSingleton(adminOptions);
 services.AddScoped<AdminAuthService>();
 services.AddStartupTask((sp, _) => sp.GetRequiredService<AdminAuthService>().EnsureIndexesAndBootstrapAsync());
 
