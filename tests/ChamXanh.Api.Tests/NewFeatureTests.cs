@@ -108,7 +108,7 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
             dateOfBirth = "1980-05-12", documentMediaIds = docs, bankCode = "VCB", bankAccountNo = "0123456789", bankAccountName = "NGUYEN VAN TU",
         })).EnsureOk();
         var super = await SuperAdmin();
-        (await super.PostAsJsonAsync($"/api/admin/gardens/{applied.GetProperty("id").GetString()}/review", new { decision = "Approve" })).EnsureSuccessStatusCode();
+        (await super.PostAsJsonAsync($"/api/admin/gardens/{applied.GetProperty("profile").GetProperty("id").GetString()}/review", new { decision = "Approve" })).EnsureSuccessStatusCode();
         return (owner, ownerId);
     }
 
@@ -135,7 +135,7 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
         Assert.Equal("TIME_IN_PAST", await (await member.PostAsJsonAsync($"/api/me/garden/plants/{plantId}/reminders",
             new { kind = "Watering", at = DateTimeOffset.UtcNow.AddHours(-1), repeat = "None" })).ErrorCode());
         // Hằng ngày lúc 07:30 giờ VN
-        var at = new DateTimeOffset(DateTime.UtcNow.Date.AddDays(1).AddHours(7).AddMinutes(30), TimeSpan.FromHours(7));
+        var at = new DateTimeOffset(DateTime.SpecifyKind(DateTime.UtcNow.Date.AddDays(1).AddHours(7).AddMinutes(30), DateTimeKind.Unspecified), TimeSpan.FromHours(7));
         var reminder = await (await member.PostAsJsonAsync($"/api/me/garden/plants/{plantId}/reminders",
             new { kind = "Watering", at, repeat = "Daily", note = "Tưới 200ml" })).EnsureOk();
         var rid = reminder.GetProperty("id").GetString()!;
