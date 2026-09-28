@@ -260,7 +260,9 @@ app.MapAccountLifecycle();
 app.MapDeals();
 app.MapOperations();
 
+// Mở cổng trước rồi mới chạy startup task: tạo index/seed lần đầu có thể lâu hơn hạn quét cổng của Render.
+await app.StartAsync();
 await app.RunStartupTasksAsync();
-app.Run();
+await app.WaitForShutdownAsync();
 
 public partial class Program;
