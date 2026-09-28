@@ -71,6 +71,7 @@ public class EscrowService(
     {
         await flags.RequireAsync(Flags.Escrow, ct);
         var l = await listings.GetAsync(req.ListingId, ct);
+        if (l.Status == ListingStatus.SoldOut && l.EscrowEnabled) throw DomainException.Conflict("OUT_OF_STOCK", "Không đủ số lượng còn lại");
         if (!l.EscrowEnabled || l.Type != ListingType.Sell || l.Status != ListingStatus.Active)
             throw new DomainException("ESCROW_NOT_AVAILABLE", "Tin này không nhận Giao dịch đảm bảo");
         if (l.PriceMode != PriceMode.Fixed || l.Price is null)
@@ -91,6 +92,7 @@ public class EscrowService(
         if (await Orders.Find(o => o.OfferMessageId == msg.Id && o.Status != OrderStatus.Cancelled).AnyAsync(ct))
             throw DomainException.Conflict("ORDER_EXISTS", "Đề nghị giá này đã có đơn");
         var l = await listings.GetAsync(conv.ListingId, ct);
+        if (l.Status == ListingStatus.SoldOut && l.EscrowEnabled) throw DomainException.Conflict("OUT_OF_STOCK", "Không đủ số lượng còn lại");
         if (!l.EscrowEnabled || l.Type != ListingType.Sell || l.Status != ListingStatus.Active)
             throw new DomainException("ESCROW_NOT_AVAILABLE", "Tin này không nhận Giao dịch đảm bảo");
         return await CreateAsync(l, conv.BuyerId, sellerId, sellerId, OrderSource.Offer, msg.Id, msg.Offer.Amount,
