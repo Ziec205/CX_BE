@@ -12,7 +12,7 @@ namespace ChamXanh.Api.Modules.Listings;
 public record ListingDetail(ListingCard Card, string Description, Dictionary<string, object> Attributes, List<string> PhotoUrls,
     string? VerificationPhotoUrl, List<string> PickupOptions, string? WantInExchange, DateTime? NeededBy, int Quantity, int Views,
     DateTime? FirstPublishedAt, DateTime? ExpiresAt, bool IsOwner, string? RejectReason, object? PendingRevision, string? RevisionRejectReason,
-    DateTime? PriorityUntil, bool AppealUsed, double? Lat, double? Lng);
+    DateTime? PriorityUntil, bool AppealUsed, double? Lat, double? Lng, List<string> Uses);
 
 public record SaveListingRequest(ListingInput Listing, bool Submit = true);
 public record RestockRequest(int Quantity);
@@ -61,7 +61,7 @@ public static class ListingEndpoints
                 l.VerificationMediaId is null ? null : $"/media/{l.VerificationMediaId}/full.webp",
                 l.PickupOptions, l.WantInExchange, l.NeededBy, l.Quantity, l.Views, l.FirstPublishedAt, l.ExpiresAt, isOwner,
                 isOwner ? l.RejectReason : null, isOwner ? l.PendingRevision : null, isOwner ? l.RevisionRejectReason : null,
-                l.PriorityUntil, l.AppealUsed, l.Location?.Coordinates.Latitude, l.Location?.Coordinates.Longitude);
+                l.PriorityUntil, l.AppealUsed, l.Location?.Coordinates.Latitude, l.Location?.Coordinates.Longitude, l.Uses);
         });
 
         var member = app.MapGroup("/api").WithTags("Listings").RequireAuthorization(Policies.Member);
@@ -101,7 +101,7 @@ public static class ListingEndpoints
             var listing = await svc.GetAsync(id, ct);
             if (!ListingRules.IsPubliclyVisible(listing.Status)) throw DomainException.NotFound("tin đăng");
             var seller = await users.GetAsync(listing.SellerId, ct);
-            if (seller.HidePhone) throw DomainException.Forbidden("Người bán chỉ nhận liên hệ qua chat");
+            if (seller.HidePhone || seller.Phone is null) throw DomainException.Forbidden("Người bán chỉ nhận liên hệ qua chat");
             var views = db.GetCollection<PhoneView>("phoneViews");
             var now = clock.GetUtcNow().UtcDateTime;
             var already = await views.Find(v => v.ViewerId == viewerId && v.ListingId == id && v.At > now.AddDays(-1)).AnyAsync(ct);
@@ -156,9 +156,9 @@ public static class ListingEndpoints
 /// <summary>Tham số tìm kiếm trên query string. Bộ lọc động dạng attr.{key}=giá trị.</summary>
 public record ListingQueryParams(string? Q, ListingType? Type, string? CategoryId, string? RootCategoryId, string? SpeciesId, string? ProvinceId,
     long? PriceMin, long? PriceMax, bool? GardenOnly, bool? EscrowOnly, bool? RealPhotoOnly, string? Pickup, int? PostedWithinDays,
-    double? Lat, double? Lng, double? RadiusKm, ListingSort? Sort, int? Page, int? PageSize, string? SellerId)
+    double? Lat, double? Lng, double? RadiusKm, ListingSort? Sort, int? Page, int? PageSize, string? SellerId, string? Use)
 {
     public ListingQuery ToQuery(IQueryCollection query) => new(Q, Type, CategoryId, RootCategoryId, SpeciesId, ProvinceId, PriceMin, PriceMax,
         GardenOnly, EscrowOnly, RealPhotoOnly, Pickup, PostedWithinDays, Lat, Lng, RadiusKm, Sort ?? ListingSort.Newest, Page ?? 1, PageSize ?? 20,
-        query.Where(kv => kv.Key.StartsWith("attr.")).ToDictionary(kv => kv.Key[5..], kv => kv.Value.ToString()), SellerId);
+        query.Where(kv => kv.Key.StartsWith("attr.")).ToDictionary(kv => kv.Key[5..], kv => kv.Value.ToString()), SellerId, Use);
 }

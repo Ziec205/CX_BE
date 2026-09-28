@@ -14,7 +14,7 @@ using MongoDB.Driver;
 
 namespace ChamXanh.Api.Modules.Identity;
 
-public record DeleteAccountRequest(string OtpCode, bool AcknowledgeLosses);
+public record DeleteAccountRequest(string? OtpCode, bool AcknowledgeLosses, string? Password = null);
 public record SanctionRequest(string Action, int? Days, int? Points, string Reason); // warn | restrict | lock | ban | unlock
 
 /// <summary>Xóa tài khoản (BR-AUTH-05) và quản lý người dùng phía quản trị (UC-ADM-04).</summary>
@@ -53,7 +53,9 @@ public class AccountLifecycleService(
         if (!req.AcknowledgeLosses) throw new DomainException("ACK_REQUIRED", "Bạn cần xác nhận đã hiểu Xu và thời gian gói còn lại sẽ bị hủy");
         var open = await escrow.Orders.CountDocumentsAsync(o => (o.BuyerId == userId || o.SellerId == userId) && Blocking.Contains(o.Status), cancellationToken: ct);
         if (open > 0) throw DomainException.Conflict("OPEN_ORDERS", "Còn đơn đảm bảo chưa hoàn tất, chưa thể xóa tài khoản");
-        await otp.VerifyAsync(user.Phone, req.OtpCode, ct);
+        // Tài khoản có SĐT xác nhận bằng OTP; tài khoản tên đăng nhập xác nhận bằng mật khẩu.
+        if (user.Phone is { } phone) await otp.VerifyAsync(phone, req.OtpCode ?? "", ct);
+        else users.EnsurePassword(user, req.Password);
 
         // Đơn chưa thanh toán: hủy để trả lại số lượng.
         foreach (var o in await escrow.Orders.Find(o => (o.BuyerId == userId || o.SellerId == userId) && o.Status == OrderStatus.AwaitingPayment).ToListAsync(ct))
@@ -74,7 +76,7 @@ public class AccountLifecycleService(
 
         // Ẩn danh hóa hồ sơ; dữ liệu giao dịch/thuế giữ theo luật định (sổ cái Xu, đơn đảm bảo không xóa).
         await users.Users.UpdateOneAsync(u => u.Id == userId, Builders<User>.Update
-            .Set(u => u.Status, UserStatus.Deleted).Set(u => u.Phone, $"deleted:{userId}").Set(u => u.DisplayName, "Người dùng đã xóa")
+            .Set(u => u.Status, UserStatus.Deleted).Set(u => u.Phone, $"deleted:{userId}").Set(u => u.Username, null).Set(u => u.PasswordHash, null).Set(u => u.DisplayName, "Người dùng đã xóa")
             .Set(u => u.FullName, null).Set(u => u.AvatarMediaId, null).Set(u => u.WardId, null).Set(u => u.HidePhone, true)
             .Set(u => u.Flags, new UserFlags()), cancellationToken: ct);
         await tokens.RevokeAllAsync(userId);
@@ -91,6 +93,7 @@ public static class AccountLifecycleEndpoints
         me.MapPost("/deletion-otp", async (ClaimsPrincipal p, UserService users, OtpService otp, CancellationToken ct) =>
         {
             var u = await users.GetAsync(p.UserId(), ct);
+            if (u.Phone is null) throw new DomainException("NO_PHONE", "Tài khoản chưa có số điện thoại, hãy xác nhận bằng mật khẩu");
             return new { devCode = await otp.RequestAsync(u.Phone, null, ct) };
         });
         me.MapPost("/delete", async (DeleteAccountRequest req, ClaimsPrincipal p, AccountLifecycleService svc, CancellationToken ct) =>
@@ -118,7 +121,7 @@ public static class AccountLifecycleEndpoints
             var list = await users.Users.Find(f).SortByDescending(u => u.CreatedAt).Skip((pageNo - 1) * 50).Limit(50).ToListAsync(ct);
             return list.Select(u => new
             {
-                u.Id, phone = DataProtector.MaskTail(u.Phone, 3), u.DisplayName, u.FullName, u.ProvinceId, u.Flags, u.Status,
+                u.Id, phone = (u.Phone is null ? null : DataProtector.MaskTail(u.Phone, 3)), u.DisplayName, u.FullName, u.ProvinceId, u.Flags, u.Status,
                 u.ActiveViolationPoints, u.PostingRestrictedUntil, u.LockedUntil, u.CreatedAt, u.LastSeenAt,
             });
         });
@@ -130,7 +133,7 @@ public static class AccountLifecycleEndpoints
             var orders = await escrow.Orders.Find(o => o.BuyerId == id || o.SellerId == id).SortByDescending(o => o.CreatedAt).Limit(20).ToListAsync(ct);
             return new
             {
-                user = new { u.Id, phone = DataProtector.MaskTail(u.Phone, 3), u.DisplayName, u.FullName, u.ProvinceId, u.Flags, u.Status, u.ActiveViolationPoints, u.PostingRestrictedUntil, u.LockedUntil, u.CreatedAt, u.LastSeenAt },
+                user = new { u.Id, phone = (u.Phone is null ? null : DataProtector.MaskTail(u.Phone, 3)), u.DisplayName, u.FullName, u.ProvinceId, u.Flags, u.Status, u.ActiveViolationPoints, u.PostingRestrictedUntil, u.LockedUntil, u.CreatedAt, u.LastSeenAt },
                 violations, listingCount,
                 orders = orders.Select(o => new { o.Id, o.Code, o.Status, o.Total, role = o.BuyerId == id ? "buyer" : "seller", o.CreatedAt }),
             };

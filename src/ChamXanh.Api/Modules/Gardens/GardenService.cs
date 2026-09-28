@@ -58,7 +58,9 @@ public partial class GardenService(IMongoDatabase db, IMongoClient client, TimeP
     /// <summary>Nộp (hoặc nộp lại khi bị yêu cầu bổ sung/từ chối) hồ sơ xác minh Nhà vườn/Shop — T1, tài liệu 02 §3.</summary>
     public async Task<GardenProfile> ApplyAsync(string userId, GardenApplication a, CancellationToken ct)
     {
-        await users.RequireActiveAsync(userId, ct);
+        var owner = await users.RequireActiveAsync(userId, ct);
+        if (owner.Phone is null)
+            throw new DomainException("PHONE_REQUIRED", "Nhà vườn/Shop cần xác thực số điện thoại trước khi nộp hồ sơ (Tài khoản → Số điện thoại)");
         var existing = await FindByOwnerAsync(userId, ct);
         if (existing is not null && existing.Status is not (VerificationStatus.NeedsInfo or VerificationStatus.Rejected))
             throw DomainException.Conflict("ALREADY_APPLIED", "Bạn đã có hồ sơ Nhà vườn/Shop");

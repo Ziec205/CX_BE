@@ -16,7 +16,7 @@ public record ListingQuery(
     string? ProvinceId = null, long? PriceMin = null, long? PriceMax = null, bool? GardenOnly = null, bool? EscrowOnly = null,
     bool? RealPhotoOnly = null, string? Pickup = null, int? PostedWithinDays = null, double? Lat = null, double? Lng = null,
     double? RadiusKm = null, ListingSort Sort = ListingSort.Newest, int Page = 1, int PageSize = 20,
-    Dictionary<string, string>? Attr = null, string? SellerId = null);
+    Dictionary<string, string>? Attr = null, string? SellerId = null, string? Use = null);
 
 public record SellerSummary(string Id, string DisplayName, string? AvatarMediaId, bool IsGarden, bool IsVerifiedGarden, bool IsProSeller);
 
@@ -87,6 +87,7 @@ public class ListingSearch(ListingService listings, CatalogService catalog, User
         if (q.PriceMin is { } min) filter &= f.Gte(l => l.SortPrice, min);
         if (q.PriceMax is { } max) filter &= f.Lte(l => l.SortPrice, max);
         if (q.EscrowOnly == true) filter &= f.Eq(l => l.EscrowEnabled, true);
+        if (q.Use is not null) filter &= f.AnyEq(l => l.Uses, q.Use);
         if (q.Pickup is not null) filter &= f.AnyEq(l => l.PickupOptions, q.Pickup);
         if (q.PostedWithinDays is { } d) filter &= f.Gte(l => l.FirstPublishedAt, now.AddDays(-d));
         if (q.RealPhotoOnly == true)

@@ -27,6 +27,8 @@ public class AuthOptions
     public string Issuer { get; set; } = "chamxanh";
     public int AccessTokenMinutes { get; set; } = 30;
     public int RefreshTokenDays { get; set; } = 60;
+    /// <summary>Bí mật dùng chung với BFF (Next.js) để tin header X-Client-IP khi giới hạn đăng ký theo IP.</summary>
+    public string? BffSecret { get; set; }
 }
 
 public record TokenPair(string AccessToken, DateTime AccessTokenExpiresAt, string RefreshToken);

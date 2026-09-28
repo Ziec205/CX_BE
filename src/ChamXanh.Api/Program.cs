@@ -101,6 +101,7 @@ services.AddStartupTask(async (sp, _) =>
 {
     await sp.GetRequiredService<OtpService>().EnsureIndexesAsync();
     await sp.GetRequiredService<UserService>().EnsureIndexesAsync();
+    await sp.GetRequiredService<UserService>().EnsureSignupIndexesAsync();
 });
 
 var adminOptions = config.GetSection("Admin").Get<AdminOptions>() ?? new AdminOptions();

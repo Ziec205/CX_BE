@@ -104,6 +104,9 @@ public class Listing
     public string Unit { get; set; } = "cây";
     public Dictionary<string, object> Attributes { get; set; } = [];
 
+    /// <summary>Công dụng do người bán chọn từ PlantUses.All, dùng cho bộ lọc Chợ cây.</summary>
+    public List<string> Uses { get; set; } = [];
+
     public string ProvinceId { get; set; } = default!;
     public string? WardId { get; set; }
     public GeoJsonPoint<GeoJson2DGeographicCoordinates>? Location { get; set; }

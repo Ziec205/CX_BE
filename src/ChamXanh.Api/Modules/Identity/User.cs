@@ -18,7 +18,13 @@ public class UserFlags
 public class User
 {
     [BsonId, BsonRepresentation(BsonType.ObjectId)] public string Id { get; set; } = ObjectId.GenerateNewId().ToString();
-    public string Phone { get; set; } = default!;
+    /// <summary>SĐT (đăng nhập OTP). Tài khoản tạo bằng tên đăng nhập thì chưa có SĐT — bổ sung khi mở Nhà vườn/Shop.</summary>
+    [BsonIgnoreIfNull] public string? Phone { get; set; }
+    /// <summary>Tên đăng nhập (chữ thường), cho tài khoản đăng ký bằng mật khẩu.</summary>
+    [BsonIgnoreIfNull] public string? Username { get; set; }
+    [BsonIgnoreIfNull] public string? PasswordHash { get; set; }
+    public int FailedLogins { get; set; }
+    public DateTime? LoginLockedUntil { get; set; }
     public string DisplayName { get; set; } = default!;
     /// <summary>Họ tên tự khai, bắt buộc trước khi đăng tin đầu tiên (02 §3, T0).</summary>
     public string? FullName { get; set; }

@@ -19,7 +19,7 @@ public record ListingInput(
     int Quantity = 1, string? Unit = null, Dictionary<string, JsonElement>? Attributes = null,
     string? ProvinceId = null, string? WardId = null, double? Lat = null, double? Lng = null,
     List<string>? PickupOptions = null, bool EscrowEnabled = false, List<string>? MediaIds = null, string? VerificationMediaId = null,
-    List<string>? CollectionIds = null);
+    List<string>? CollectionIds = null, List<string>? Uses = null);
 
 public class ListingService(
     IMongoDatabase db, TimeProvider clock, ListingOptions options, UserService users, CatalogService catalog,
@@ -170,7 +170,7 @@ public class ListingService(
         // Trường không trọng yếu: áp dụng ngay (BR-LST-03). Giá áp dụng ngay để thông báo giảm giá chạy được.
         var nonCritical = Builders<Listing>.Update
             .Set(l => l.Description, draft.Description).Set(l => l.Quantity, Math.Max(draft.Quantity, current.Reserved + current.Sold))
-            .Set(l => l.Unit, draft.Unit).Set(l => l.Attributes, draft.Attributes).Set(l => l.PickupOptions, draft.PickupOptions)
+            .Set(l => l.Unit, draft.Unit).Set(l => l.Attributes, draft.Attributes).Set(l => l.Uses, draft.Uses).Set(l => l.PickupOptions, draft.PickupOptions)
             .Set(l => l.Location, draft.Location).Set(l => l.WardId, draft.WardId).Set(l => l.ProvinceId, draft.ProvinceId)
             .Set(l => l.EscrowEnabled, draft.EscrowEnabled).Set(l => l.PriceNegotiable, draft.PriceNegotiable)
             .Set(l => l.Rent, draft.Rent).Set(l => l.BudgetMin, draft.BudgetMin).Set(l => l.BudgetMax, draft.BudgetMax)
@@ -459,6 +459,10 @@ public class ListingService(
         if (mediaIds.Count < minMedia || mediaIds.Count > maxMedia) errors.Add(new("mediaIds", $"Cần {minMedia}–{maxMedia} ảnh"));
         if (mediaIds.Distinct().Count() != mediaIds.Count) errors.Add(new("mediaIds", "Có ảnh bị lặp"));
 
+        var uses = (input.Uses ?? []).Distinct().ToList();
+        if (uses.Count > PlantUses.MaxPerListing || uses.Any(u => !PlantUses.All.Contains(u)))
+            errors.Add(new("uses", $"Chọn tối đa {PlantUses.MaxPerListing} công dụng trong danh sách có sẵn"));
+
         var pickup = input.PickupOptions ?? ["PICKUP"];
         if (pickup.Count == 0 || pickup.Any(p => !PickupValues.Contains(p))) errors.Add(new("pickupOptions", $"Hình thức nhận hợp lệ: {string.Join(", ", PickupValues)}"));
 
@@ -528,6 +532,7 @@ public class ListingService(
         l.Quantity = input.Quantity;
         l.Unit = string.IsNullOrWhiteSpace(input.Unit) ? "cây" : input.Unit.Trim();
         l.Attributes = attrs;
+        l.Uses = uses;
         l.ProvinceId = provinceId!;
         l.WardId = input.WardId;
         l.Location = location;

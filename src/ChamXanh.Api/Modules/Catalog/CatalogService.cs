@@ -23,14 +23,22 @@ public class CatalogService(IMongoDatabase db, TimeProvider clock, IServiceProvi
     {
         await Species.Indexes.CreateOneAsync(new CreateIndexModel<Species>(Builders<Species>.IndexKeys.Ascending(s => s.SearchTerms)), cancellationToken: ct);
         await Species.Indexes.CreateOneAsync(new CreateIndexModel<Species>(Builders<Species>.IndexKeys.Ascending(s => s.CategoryIds)), cancellationToken: ct);
-        if (await Categories.EstimatedDocumentCountAsync(cancellationToken: ct) == 0)
-            await Categories.InsertManyAsync(CatalogSeed.Create(), cancellationToken: ct);
-        if (await Species.EstimatedDocumentCountAsync(cancellationToken: ct) == 0)
-        {
-            var seed = CatalogSeed.Species();
-            foreach (var s in seed) Prepare(s);
-            await Species.InsertManyAsync(seed, cancellationToken: ct);
-        }
+        // Chỉ thêm mục seed còn thiếu (theo Id) — không ghi đè chỉnh sửa của quản trị, để DB cũ nhận được danh mục mới.
+        var existingCats = (await Categories.Find(_ => true).Project(c => c.Id).ToListAsync(ct)).ToHashSet();
+        var newCats = CatalogSeed.Create().Where(c => !existingCats.Contains(c.Id)).ToList();
+        if (newCats.Count > 0) await Categories.InsertManyAsync(newCats, cancellationToken: ct);
+
+        var existingSpecies = (await Species.Find(_ => true).Project(s => s.Id).ToListAsync(ct)).ToHashSet();
+        var speciesSeed = CatalogSeed.Species();
+        var newSpecies = speciesSeed.Where(s => !existingSpecies.Contains(s.Id)).ToList();
+        foreach (var s in newSpecies) Prepare(s);
+        if (newSpecies.Count > 0) await Species.InsertManyAsync(newSpecies, cancellationToken: ct);
+        // Loài đã có: chỉ bổ sung danh mục mới vào CategoryIds.
+        var links = speciesSeed.Where(s => existingSpecies.Contains(s.Id) && s.CategoryIds.Count > 0)
+            .Select(s => new UpdateOneModel<Species>(Builders<Species>.Filter.Eq(x => x.Id, s.Id),
+                Builders<Species>.Update.AddToSetEach(x => x.CategoryIds, s.CategoryIds)))
+            .ToList();
+        if (links.Count > 0) await Species.BulkWriteAsync(links, cancellationToken: ct);
     }
 
     public Task<List<Category>> ListCategoriesAsync(CancellationToken ct) =>

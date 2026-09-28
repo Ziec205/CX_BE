@@ -13,6 +13,8 @@ services:
         value: chamxanh
       - key: Auth__JwtKey
         generateValue: true
+      - key: Auth__BffSecret
+        sync: false           # trùng với BFF_SECRET trên Vercel — để giới hạn đăng ký theo IP người dùng thật
       - key: Security__DataKey
         sync: false           # base64 của 32 byte ngẫu nhiên — mất khóa là mất dữ liệu CCCD đã mã hóa, phải sao lưu an toàn
       - key: Security__HmacKey
