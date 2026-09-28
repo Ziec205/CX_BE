@@ -15,6 +15,26 @@ jobs:
       - run: dotnet build
       # Integration test tự chạy MongoDB replica set tạm (EphemeralMongo).
       - run: dotnet test --no-build --logger "trx;LogFileName=results.trx" --logger "console;verbosity=normal"
+      # In tên + lỗi các test hỏng thành annotation (xem được không cần đăng nhập).
+      - name: Report failed tests
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          total = failed = 0
+          for f in glob.glob("tests/**/TestResults/*.trx", recursive=True):
+              root = ET.parse(f).getroot()
+              for r in root.iterfind(".//t:UnitTestResult", ns):
+                  total += 1
+                  if r.get("outcome") != "Failed":
+                      continue
+                  failed += 1
+                  msg = r.find(".//t:Message", ns)
+                  text = (msg.text or "").replace("\n", " ")[:600] if msg is not None else ""
+                  print(f"::error title={r.get('testName')[:180]}::{text}")
+          print(f"::notice::{total - failed}/{total} test passed")
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
