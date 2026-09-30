@@ -32,7 +32,7 @@ public static partial class ListingRules
     }
 
     public static (int Min, int Max) MediaBounds(Category category, ListingType type) =>
-        type == ListingType.Buy ? (0, 12) : category.IsLivePlant ? (3, 12) : (1, 12);
+        type == ListingType.Buy ? (0, 12) : (1, 12);
 
     public record PriceInput(long? Price, PriceMode Mode, bool Negotiable, long? RefMin, long? RefMax,
         long? BudgetMin, long? BudgetMax, RentTerms? Rent, int Quantity);

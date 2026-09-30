@@ -6,6 +6,7 @@ using ChamXanh.Api.Common.Auth;
 using EphemeralMongo;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ChamXanh.Api.Tests;
 
@@ -30,7 +31,7 @@ public abstract class ApiTestBase(MongoFixture mongo) : IAsyncLifetime
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
     int _phoneSeq;
 
-    public virtual Task InitializeAsync()
+    public virtual async Task InitializeAsync()
     {
         Factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
         {
@@ -39,7 +40,9 @@ public abstract class ApiTestBase(MongoFixture mongo) : IAsyncLifetime
             b.UseSetting("Mongo:Database", $"test_{Guid.NewGuid():N}");
             ConfigureSettings(b);
         });
-        return Task.CompletedTask;
+        // App mở cổng trước rồi mới tạo index/seed: đợi seed xong để test không gặp bảng giá/danh mục trống.
+        _ = Factory.Server;
+        await Factory.Services.GetRequiredService<ChamXanh.Api.Common.StartupGate>().Ready.WaitAsync(TimeSpan.FromSeconds(60));
     }
 
     protected virtual void ConfigureSettings(IWebHostBuilder b) { }

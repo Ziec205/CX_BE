@@ -109,7 +109,7 @@ public class ListingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     public async Task Validation_errors_contact_info_and_too_few_photos()
     {
         var (c, _) = await Member();
-        var res = await c.PostAsJsonAsync("/api/listings", SenDa(await Photos(c, 2), desc: "Liên hệ 0912345678 để có giá tốt nhất nhé"));
+        var res = await c.PostAsJsonAsync("/api/listings", SenDa([], desc: "Liên hệ 0912345678 để có giá tốt nhất nhé"));
         Assert.Equal("VALIDATION_FAILED", await res.ErrorCode());
         var body = await res.Content.ReadAsStringAsync();
         Assert.Contains("mediaIds", body);
@@ -366,7 +366,7 @@ public class ListingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     {
         var anon = Anonymous();
         var cats = await (await anon.GetAsync("/api/categories")).EnsureOk();
-        Assert.Equal(4, cats.GetArrayLength());
+        Assert.Equal(5, cats.GetArrayLength()); // Cây cảnh, Bonsai, Cây giống, Lan & hoa, Vật tư
         var bonsai = await (await anon.GetAsync("/api/categories/bonsai-mini")).EnsureOk();
         Assert.Contains(bonsai.GetProperty("attributes").EnumerateArray(), a => a.GetProperty("key").GetString() == "dangThe");
         var sp = await (await anon.GetAsync("/api/species?q=ho%20vi")).EnsureOk();

@@ -442,8 +442,7 @@ public class ListingService(
             species = await catalog.GetSpeciesAsync(input.SpeciesId, ct);
             if (species.LegalFlag == LegalFlag.Banned) throw new DomainException("BANNED_SPECIES", $"Loài \"{species.CommonName}\" bị cấm mua bán");
         }
-        else if (category.IsLivePlant && string.IsNullOrWhiteSpace(input.SpeciesId) && input.Type != ListingType.Buy)
-            errors.Add(new("speciesId", "Hãy chọn loài cây (hoặc \"Khác / không rõ\")"));
+        // Loài cây không còn bắt buộc (form đăng tin đã bỏ ô chọn loài); tin cũ vẫn giữ loài đã chọn.
 
         errors.AddRange(ListingRules.ValidateText(input.Title, input.Description));
         errors.AddRange(ListingRules.ValidatePrice(input.Type, category, new(input.Price, input.PriceMode, input.PriceNegotiable,

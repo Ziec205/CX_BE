@@ -31,7 +31,7 @@ public class Category
     public int Level { get; set; }
     public int Order { get; set; }
     public bool Active { get; set; } = true;
-    /// <summary>Danh mục cây sống: bắt buộc chọn loài, tình trạng cây, chiều cao, tối thiểu 3 ảnh.</summary>
+    /// <summary>Danh mục cây sống: bắt buộc tình trạng cây, chiều cao.</summary>
     public bool IsLivePlant { get; set; }
     /// <summary>Hàng hạn chế: mọi tin phải duyệt tay (03 §4.3, vd phân bón).</summary>
     public bool RequiresManualReview { get; set; }
