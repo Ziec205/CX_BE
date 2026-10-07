@@ -21,9 +21,10 @@ public static class PriceBookSeed
         ChangeNote = "Bảng giá khởi tạo",
         PriceGroups =
         [
-            new() { Code = Standard, Name = "Phổ thông", CategoryIds = ["noi-that", "sen-da", "cay-leo", "hoa-kieng", "thuy-sinh", "chau", "dat-gia-the", "phan-bon", "dung-cu", "tuoi", "ke-gian"] },
-            new() { Code = Seedling, Name = "Cây giống", CategoryIds = ["giong-an-qua", "giong-lam-nghiep", "hat-giong", "an-qua-truong-thanh", "rau-gia-vi"] },
-            new() { Code = Premium, Name = "Giá trị cao", CategoryIds = ["bonsai-mini", "bonsai-trung-dai", "cay-the", "cong-trinh", "mai-vang"] },
+            new() { Code = Standard, Name = "Phổ thông", CategoryIds = ["noi-that", "sen-da", "cay-leo", "hoa-kieng", "thuy-sinh", "chau", "dat-gia-the", "phan-bon", "dung-cu", "tuoi", "ke-gian",
+                "cay-mini", "cay-ngoai-troi", "cay-hang-rao", "cay-canh-khac", "lan", "hoa-hong", "hoa-giay", "hoa-tet", "lan-hoa-khac", "vat-tu-khac"] },
+            new() { Code = Seedling, Name = "Cây giống", CategoryIds = ["giong-an-qua", "giong-lam-nghiep", "hat-giong", "an-qua-truong-thanh", "rau-gia-vi", "duoc-lieu", "giong-khac"] },
+            new() { Code = Premium, Name = "Giá trị cao", CategoryIds = ["bonsai-mini", "bonsai-trung-dai", "cay-the", "cong-trinh", "mai-vang", "tieu-canh", "gia-tri-cao-khac"] },
         ],
         ListingServices =
         [

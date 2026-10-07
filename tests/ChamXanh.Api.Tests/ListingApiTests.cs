@@ -367,6 +367,9 @@ public class ListingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
         var anon = Anonymous();
         var cats = await (await anon.GetAsync("/api/categories")).EnsureOk();
         Assert.Equal(5, cats.GetArrayLength()); // Cây cảnh, Bonsai, Cây giống, Lan & hoa, Vật tư
+        // Mỗi nhóm có mục "khác" đứng cuối để đăng được cây không có trong danh sách.
+        foreach (var root in cats.EnumerateArray())
+            Assert.EndsWith("khác", root.GetProperty("children").EnumerateArray().Last().GetProperty("name").GetString());
         var bonsai = await (await anon.GetAsync("/api/categories/bonsai-mini")).EnsureOk();
         Assert.Contains(bonsai.GetProperty("attributes").EnumerateArray(), a => a.GetProperty("key").GetString() == "dangThe");
         var sp = await (await anon.GetAsync("/api/species?q=ho%20vi")).EnsureOk();

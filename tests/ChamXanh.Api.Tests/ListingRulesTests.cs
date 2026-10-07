@@ -184,3 +184,15 @@ public class ListingRulesTests
         Assert.Equal(new DateTime(2026, 9, 25, 2, 0, 0, DateTimeKind.Utc), due); // 9h sáng hôm sau giờ VN
     }
 }
+
+public class CatalogSeedTests
+{
+    [Fact]
+    public void Every_posting_category_has_a_price_group()
+    {
+        var book = ChamXanh.Api.Modules.Pricing.PriceBookSeed.Create(DateTime.UtcNow);
+        var missing = CatalogSeed.Create().Where(c => c.Level == 2)
+            .Where(c => ChamXanh.Api.Modules.Pricing.PriceCalculator.ResolvePriceGroup(book, c.Id) is null).Select(c => c.Id).ToList();
+        Assert.Empty(missing);
+    }
+}

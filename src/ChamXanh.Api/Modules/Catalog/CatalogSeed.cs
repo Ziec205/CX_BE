@@ -18,6 +18,20 @@ public static class CatalogSeed
         Attributes = live ? [PlantCondition, Height(), .. extra] : [.. extra],
     };
 
+    /// <summary>Mục "khác" của một nhóm: luôn đứng cuối danh sách con.</summary>
+    static Category Other(string id, string parent, string name, bool live, params AttributeDefinition[] extra)
+    {
+        var c = Leaf(id, parent, name, live, extra);
+        c.Order = 99;
+        return c;
+    }
+
+    /// <summary>Tên cây gõ tự do, kèm vài gợi ý phổ biến để bấm nhanh.</summary>
+    static AttributeDefinition LoaiCay(params string[] suggestions) => new()
+    {
+        Key = "loaiCay", Label = "Loại cây cụ thể", Type = AttributeType.SingleSelect, Options = [.. suggestions], Filterable = true, ShowOnCard = true, Order = -1,
+    };
+
     public static List<Category> Create()
     {
         var bonsaiAttrs = new[]
@@ -48,13 +62,18 @@ public static class CatalogSeed
             Leaf("cay-hang-rao", "cay-canh", "Cây hàng rào, phủ nền", true),
 
             Leaf("lan", "lan-hoa", "Lan các loại", true,
-                Select("loaiLan", "Loại lan", false, "Hồ điệp", "Dendrobium", "Cattleya", "Vanda", "Lan kiếm (Cymbidium)", "Phi điệp", "Lan rừng gây trồng", "Khác"),
+                Select("loaiLan", "Loại lan", false, "Hồ điệp", "Dendrobium", "Cattleya", "Vanda", "Lan kiếm (Cymbidium)", "Phi điệp", "Kim điệp", "Hoàng thảo thủy tiên",
+                    "Ngọc điểm (đai châu)", "Vũ nữ (Oncidium)", "Mokara", "Lan quế", "Lan rừng gây trồng"),
                 Select("trangThaiHoa", "Trạng thái hoa", false, "Đang nở", "Có nụ", "Chưa ra hoa"),
                 Select("giaThe", "Giá thể", false, "Dớn", "Vỏ thông", "Than củi", "Gắn gỗ/lũa", "Khác")),
             Leaf("hoa-hong", "lan-hoa", "Hoa hồng", true,
                 Select("dangHong", "Dạng cây", false, "Hồng bụi", "Hồng leo", "Hồng thân gỗ", "Hồng mini")),
             Leaf("hoa-giay", "lan-hoa", "Hoa giấy", true),
             Leaf("hoa-tet", "lan-hoa", "Hoa Tết, hoa theo mùa", true,
+                Select("trangThaiHoa", "Trạng thái hoa", false, "Đang nở", "Có nụ", "Chưa ra hoa")),
+            // Mục "khác" cuối mỗi nhóm: cây không thuộc danh mục nào ở trên, người bán tự ghi tên cây.
+            Other("lan-hoa-khac", "lan-hoa", "Hoa & lan khác", true, LoaiCay("Cẩm tú cầu", "Dạ yến thảo", "Hoa sứ (sứ Thái)", "Hoa lài", "Hoa trà", "Cúc", "Hoa ly",
+                "Đồng tiền", "Cát tường", "Cẩm chướng", "Dừa cạn", "Mười giờ", "Hướng dương", "Thược dược", "Trạng nguyên", "Ngọc bút", "Hoa sen, súng", "Oải hương (lavender)"),
                 Select("trangThaiHoa", "Trạng thái hoa", false, "Đang nở", "Có nụ", "Chưa ra hoa")),
 
             Leaf("tieu-canh", "gia-tri-cao", "Tiểu cảnh, non bộ", false,
@@ -72,6 +91,7 @@ public static class CatalogSeed
             Leaf("cay-leo", "cay-canh", "Cây leo, cây treo", true),
             Leaf("hoa-kieng", "cay-canh", "Hoa & cây kiểng", true),
             Leaf("thuy-sinh", "cay-canh", "Cây thủy sinh & terrarium", true),
+            Other("cay-canh-khac", "cay-canh", "Cây cảnh khác", true, LoaiCay("Kim ngân", "Phát tài", "Vạn niên thanh", "Cau tiểu trâm", "Dương xỉ", "Ráy, môn", "Cọ", "Tùng", "Trúc")),
 
             Leaf("bonsai-mini", "gia-tri-cao", "Bonsai mini (< 30cm)", true, bonsaiAttrs),
             Leaf("bonsai-trung-dai", "gia-tri-cao", "Bonsai trung/đại", true, bonsaiAttrs),
@@ -82,6 +102,7 @@ public static class CatalogSeed
             Leaf("mai-vang", "gia-tri-cao", "Mai vàng", true,
                 Select("giongMai", "Giống mai", false, "Mai giảo", "Mai cánh", "Mai Yên Tử", "Mai ghép", "Khác"),
                 Num("hoanhGoc", "Hoành gốc", "cm")),
+            Other("gia-tri-cao-khac", "gia-tri-cao", "Cây giá trị cao khác", true, LoaiCay("Sanh", "Si", "Linh sam", "Tùng La Hán", "Nguyệt quế", "Khế", "Mai chiếu thủy", "Đào thế", "Cây cổ thụ")),
 
             Leaf("giong-an-qua", "giong-an-qua-root", "Cây giống ăn quả", true,
                 new AttributeDefinition { Key = "giong", Label = "Giống / cultivar", Type = AttributeType.Text, Filterable = false },
@@ -95,6 +116,7 @@ public static class CatalogSeed
                 ] },
             Leaf("an-qua-truong-thanh", "giong-an-qua-root", "Cây ăn quả trưởng thành", true),
             Leaf("rau-gia-vi", "giong-an-qua-root", "Rau, gia vị giống", true),
+            Other("giong-khac", "giong-an-qua-root", "Cây giống, cây trồng khác", true, LoaiCay("Cây công nghiệp (cà phê, tiêu…)", "Cây lấy gỗ", "Nấm, phôi nấm", "Cây che phủ đất")),
 
             Leaf("chau", "vat-tu", "Chậu", false,
                 Select("chatLieu", "Chất liệu", true, "Xi măng", "Đất nung", "Gốm/sứ", "Nhựa", "Composite", "Đá mài"),
@@ -108,8 +130,10 @@ public static class CatalogSeed
             Leaf("dung-cu", "vat-tu", "Dụng cụ", false),
             Leaf("tuoi", "vat-tu", "Tưới tự động", false),
             Leaf("ke-gian", "vat-tu", "Kệ, giàn, lưới", false),
+            Other("vat-tu-khac", "vat-tu", "Vật tư khác", false,
+                new AttributeDefinition { Key = "loaiVatTu", Label = "Loại vật tư", Type = AttributeType.Text }),
         };
-        foreach (var id in new[] { "bonsai-mini", "bonsai-trung-dai", "cay-the", "mai-vang" })
+        foreach (var id in new[] { "bonsai-mini", "bonsai-trung-dai", "cay-the", "mai-vang", "gia-tri-cao-khac" })
             list.First(c => c.Id == id).AllowNegotiablePrice = true;
         return list;
     }

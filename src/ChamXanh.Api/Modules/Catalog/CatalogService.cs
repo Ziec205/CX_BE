@@ -28,9 +28,22 @@ public class CatalogService(IMongoDatabase db, TimeProvider clock, IServiceProvi
         var newCats = CatalogSeed.Create().Where(c => !existingCats.Contains(c.Id)).ToList();
         if (newCats.Count > 0) await Categories.InsertManyAsync(newCats, cancellationToken: ct);
         // DB cũ: bỏ bắt buộc các ô đặc thù của danh mục cây sống để form trả về đúng (chỉ Tình trạng cây, Chiều cao bắt buộc).
-        foreach (var c in await Categories.Find(c => c.IsLivePlant).ToListAsync(ct))
-            if (RelaxPlantAttributes(c))
-                await Categories.ReplaceOneAsync(x => x.Id == c.Id, c, cancellationToken: ct);
+        // DB cũ còn nhận thêm gợi ý mới của seed (chỉ bổ sung, giữ nguyên gợi ý quản trị đã sửa).
+        var seed = CatalogSeed.Create().ToDictionary(c => c.Id);
+        foreach (var c in await Categories.Find(_ => true).ToListAsync(ct))
+        {
+            var changed = RelaxPlantAttributes(c);
+            if (seed.TryGetValue(c.Id, out var s))
+                foreach (var a in c.Attributes.Where(a => a.Type is AttributeType.SingleSelect or AttributeType.MultiSelect))
+                    if (s.Attributes.FirstOrDefault(x => x.Key == a.Key) is { } sa && sa.Options.Except(a.Options).ToList() is { Count: > 0 } extra)
+                    {
+                        a.Options.AddRange(extra);
+                        // "Khác" cũ luôn đứng cuối danh sách gợi ý.
+                        if (a.Options.Remove("Khác")) a.Options.Add("Khác");
+                        changed = true;
+                    }
+            if (changed) await Categories.ReplaceOneAsync(x => x.Id == c.Id, c, cancellationToken: ct);
+        }
 
         var existingSpecies = (await Species.Find(_ => true).Project(s => s.Id).ToListAsync(ct)).ToHashSet();
         var speciesSeed = CatalogSeed.Species();
