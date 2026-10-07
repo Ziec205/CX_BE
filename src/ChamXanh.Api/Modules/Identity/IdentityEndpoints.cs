@@ -11,10 +11,10 @@ public record RegisterRequest(string Username, string Password, string ConfirmPa
 public record PasswordLoginRequest(string Username, string Password);
 public record AuthResponse(TokenPair Tokens, MeResponse User, bool IsNew);
 public record MeResponse(string Id, string? Phone, string? Username, string DisplayName, string? FullName, string? ProvinceId, string? WardId,
-    string? AvatarMediaId, bool HidePhone, UserFlags Flags, string Status, bool CanPost, DateTime CreatedAt)
+    string? AvatarMediaId, bool HidePhone, UserFlags Flags, string Status, bool CanPost, DateTime CreatedAt, string? Email)
 {
     public static MeResponse From(User u) => new(u.Id, u.Phone, u.Username, u.DisplayName, u.FullName, u.ProvinceId, u.WardId,
-        u.AvatarMediaId, u.HidePhone, u.Flags, u.Status.ToString(), u.HasPostingProfile, u.CreatedAt);
+        u.AvatarMediaId, u.HidePhone, u.Flags, u.Status.ToString(), u.HasPostingProfile, u.CreatedAt, u.Email);
 }
 
 public static class IdentityEndpoints

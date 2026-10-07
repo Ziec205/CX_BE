@@ -48,7 +48,7 @@ public static class NotificationGroups
 
     public static string Of(string type) => type.Split('.')[0] switch
     {
-        "escrow" or "wallet" or "garden" => Transaction,
+        "escrow" or "wallet" or "garden" or "plan" => Transaction,
         "account" or "sanction" => Security,
         "chat" => Chat,
         "listing" => Listing,

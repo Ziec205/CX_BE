@@ -23,6 +23,7 @@ using ChamXanh.Api.Modules.Community;
 using ChamXanh.Api.Modules.Ai;
 using ChamXanh.Api.Modules.Deals;
 using ChamXanh.Api.Modules.Operations;
+using ChamXanh.Api.Modules.Plans;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using MongoDB.Bson;
@@ -205,7 +206,39 @@ services.AddStartupTask(async (sp, _) =>
     await sp.GetRequiredService<CommunityService>().EnsureIndexesAsync();
     await sp.GetRequiredService<RecognitionService>().EnsureIndexesAsync();
 });
+// Gói Plus/Pro thanh toán qua PayOS. Chưa có khóa PayOS: dùng cổng giả lập (chỉ khi AllowSimulator, mặc định bật ở Development).
+var payOsOptions = config.GetSection("PayOS").Get<PayOsOptions>() ?? new PayOsOptions();
+if (builder.Environment.IsDevelopment() && config["PayOS:AllowSimulator"] is null) payOsOptions.AllowSimulator = true;
+services.AddSingleton(payOsOptions);
+if (payOsOptions.IsConfigured)
+    services.AddHttpClient<IPlanPaymentGateway, PayOsGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));
+else
+    services.AddSingleton<IPlanPaymentGateway, SimulatedPlanGateway>();
+services.AddScoped<PlanService>();
+services.AddHostedService<PlanWorker>();
+
+// Trợ lý AI dùng Google Gemini; chưa có khóa thì trả lời mẫu (chế độ thử).
+var geminiOptions = config.GetSection("Gemini").Get<GeminiOptions>() ?? new GeminiOptions();
+services.AddSingleton(geminiOptions);
+if (geminiOptions.ApiKey.Length > 0)
+    services.AddHttpClient<IAiModel, GeminiModel>(c => c.Timeout = TimeSpan.FromSeconds(geminiOptions.TimeoutSeconds * 2 + 10));
+else
+    services.AddSingleton<IAiModel, SimulatedAiModel>();
+services.AddScoped<AiQuotaService>();
+services.AddScoped<AssistantService>();
+services.AddStartupTask(async (sp, _) =>
+{
+    await sp.GetRequiredService<PlanService>().EnsureIndexesAsync();
+    await sp.GetRequiredService<AiQuotaService>().EnsureIndexesAsync();
+    await sp.GetRequiredService<AssistantService>().EnsureIndexesAsync();
+});
+
 services.AddScoped<NotificationService>();
+// Email nhắc lịch chăm cây (SMTP); chưa cấu hình thì chỉ ghi log.
+var emailOptions = config.GetSection("Email").Get<EmailOptions>() ?? new EmailOptions();
+services.AddSingleton(emailOptions);
+if (emailOptions.IsConfigured) services.AddSingleton<IEmailSender, SmtpEmailSender>();
+else services.AddSingleton<IEmailSender, LogEmailSender>();
 services.AddScoped<PlantCareService>();
 services.AddScoped<ExploreService>();
 services.AddHostedService<CareReminderWorker>();
@@ -257,6 +290,8 @@ app.MapFeatureFlags();
 app.MapEscrow();
 app.MapCommunity();
 app.MapAi();
+app.MapAssistant();
+app.MapPlans();
 app.MapAccountLifecycle();
 app.MapDeals();
 app.MapOperations();

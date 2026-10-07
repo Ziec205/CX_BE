@@ -69,6 +69,8 @@ public abstract class ApiTestBase(MongoFixture mongo) : IAsyncLifetime
         var client = WithToken(auth.GetProperty("tokens").GetProperty("accessToken").GetString()!);
         if (completeProfile)
             (await client.PutAsJsonAsync("/api/me", new { fullName = "Nguyễn Văn Test", provinceId = "79" })).EnsureSuccessStatusCode();
+        // Email nhận nhắc lịch (bắt buộc trước khi đặt lời nhắc chăm cây).
+        (await client.PutAsJsonAsync("/api/me", new { email = $"u{phone}@test.local" })).EnsureSuccessStatusCode();
         return (client, auth.GetProperty("user").GetProperty("id").GetString()!);
     }
 

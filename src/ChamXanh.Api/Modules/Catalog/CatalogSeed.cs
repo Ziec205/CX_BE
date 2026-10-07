@@ -48,7 +48,7 @@ public static class CatalogSeed
             Leaf("cay-hang-rao", "cay-canh", "Cây hàng rào, phủ nền", true),
 
             Leaf("lan", "lan-hoa", "Lan các loại", true,
-                Select("loaiLan", "Loại lan", true, "Hồ điệp", "Dendrobium", "Cattleya", "Vanda", "Lan kiếm (Cymbidium)", "Phi điệp", "Lan rừng gây trồng", "Khác"),
+                Select("loaiLan", "Loại lan", false, "Hồ điệp", "Dendrobium", "Cattleya", "Vanda", "Lan kiếm (Cymbidium)", "Phi điệp", "Lan rừng gây trồng", "Khác"),
                 Select("trangThaiHoa", "Trạng thái hoa", false, "Đang nở", "Có nụ", "Chưa ra hoa"),
                 Select("giaThe", "Giá thể", false, "Dớn", "Vỏ thông", "Than củi", "Gắn gỗ/lũa", "Khác")),
             Leaf("hoa-hong", "lan-hoa", "Hoa hồng", true,
@@ -85,7 +85,7 @@ public static class CatalogSeed
 
             Leaf("giong-an-qua", "giong-an-qua-root", "Cây giống ăn quả", true,
                 new AttributeDefinition { Key = "giong", Label = "Giống / cultivar", Type = AttributeType.Text, Filterable = false },
-                Select("nhanGiong", "Phương pháp nhân giống", true, "Ghép", "Chiết", "Giâm", "Gieo hạt", "Nuôi cấy mô"),
+                Select("nhanGiong", "Phương pháp nhân giống", false, "Ghép", "Chiết", "Giâm", "Gieo hạt", "Nuôi cấy mô"),
                 Num("tuoiThang", "Tuổi cây giống", "tháng")),
             Leaf("giong-lam-nghiep", "giong-an-qua-root", "Cây giống lâm nghiệp", true),
             new() { Id = "hat-giong", ParentId = "giong-an-qua-root", Name = "Hạt giống", Level = 2,

@@ -27,6 +27,10 @@ public class CatalogService(IMongoDatabase db, TimeProvider clock, IServiceProvi
         var existingCats = (await Categories.Find(_ => true).Project(c => c.Id).ToListAsync(ct)).ToHashSet();
         var newCats = CatalogSeed.Create().Where(c => !existingCats.Contains(c.Id)).ToList();
         if (newCats.Count > 0) await Categories.InsertManyAsync(newCats, cancellationToken: ct);
+        // DB cũ: bỏ bắt buộc các ô đặc thù của danh mục cây sống để form trả về đúng (chỉ Tình trạng cây, Chiều cao bắt buộc).
+        foreach (var c in await Categories.Find(c => c.IsLivePlant).ToListAsync(ct))
+            if (RelaxPlantAttributes(c))
+                await Categories.ReplaceOneAsync(x => x.Id == c.Id, c, cancellationToken: ct);
 
         var existingSpecies = (await Species.Find(_ => true).Project(s => s.Id).ToListAsync(ct)).ToHashSet();
         var speciesSeed = CatalogSeed.Species();
@@ -62,9 +66,23 @@ public class CatalogService(IMongoDatabase db, TimeProvider clock, IServiceProvi
         var dupKeys = c.Attributes.GroupBy(a => a.Key).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         if (dupKeys.Count > 0) throw new DomainException("DUPLICATE_ATTRIBUTE", $"Trùng khóa thuộc tính: {string.Join(", ", dupKeys)}");
         foreach (var a in c.Attributes.Where(a => a.Type is AttributeType.SingleSelect or AttributeType.MultiSelect && a.Options.Count == 0))
-            throw new DomainException("MISSING_OPTIONS", $"Thuộc tính '{a.Key}' dạng chọn phải có danh sách lựa chọn");
+            throw new DomainException("MISSING_OPTIONS", $"Thuộc tính '{a.Key}' dạng chọn phải có danh sách gợi ý");
+        RelaxPlantAttributes(c);
         await Categories.ReplaceOneAsync(x => x.Id == c.Id, c, new ReplaceOptions { IsUpsert = true }, ct);
         return c;
+    }
+
+    /// <summary>Danh mục cây sống: người bán tự quyết thông tin cây, chỉ giữ bắt buộc các ô cốt lõi. Trả true nếu có thay đổi.</summary>
+    static bool RelaxPlantAttributes(Category c)
+    {
+        if (!c.IsLivePlant) return false;
+        var changed = false;
+        foreach (var a in c.Attributes.Where(a => a.Required && !AttributeValidator.CoreRequiredKeys.Contains(a.Key)))
+        {
+            a.Required = false;
+            changed = true;
+        }
+        return changed;
     }
 
     public async Task<Species> GetSpeciesAsync(string id, CancellationToken ct = default) =>

@@ -31,3 +31,30 @@ services:
         value: https://chamxanh.vn
       - key: Cors__Origins__1
         value: https://admin.chamxanh.vn
+      # Gói Xanh Plus/Pro thanh toán qua PayOS: lấy 3 khóa trong kênh thanh toán PayOS (my.payos.vn).
+      # Đặt webhook của kênh là https://<api>/api/payments/payos/webhook
+      - key: PayOS__ClientId
+        sync: false
+      - key: PayOS__ApiKey
+        sync: false
+      - key: PayOS__ChecksumKey
+        sync: false
+      - key: PayOS__ReturnBaseUrl
+        value: https://chamxanh.vn  # web mà PayOS đưa người dùng quay về sau khi trả tiền
+      # Trợ lý AI: khóa Google AI Studio (aistudio.google.com → Get API key).
+      - key: Gemini__ApiKey
+        sync: false
+      - key: Gemini__Model
+        value: gemini-3.5-flash
+      # Email nhắc lịch chăm cây qua SMTP. Gmail: smtp.gmail.com, Username = địa chỉ Gmail,
+      # Password = "mật khẩu ứng dụng" 16 ký tự (Google Account → Bảo mật → Mật khẩu ứng dụng), không dùng mật khẩu Gmail.
+      - key: Email__SmtpHost
+        value: smtp.gmail.com
+      - key: Email__Username
+        sync: false
+      - key: Email__Password
+        sync: false
+      - key: Email__From
+        sync: false
+      - key: Email__WebBaseUrl
+        value: https://chamxanh.vn

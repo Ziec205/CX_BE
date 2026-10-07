@@ -6,7 +6,9 @@ using MongoDB.Driver;
 
 namespace ChamXanh.Api.Modules.Identity;
 
-public record UpdateProfileRequest(string? DisplayName, string? FullName, string? ProvinceId, string? WardId, bool? HidePhone, string? AvatarMediaId);
+/// <summary>Email: chuỗi rỗng là xóa email.</summary>
+public record UpdateProfileRequest(string? DisplayName, string? FullName, string? ProvinceId, string? WardId, bool? HidePhone, string? AvatarMediaId,
+    string? Email = null);
 
 public class UserService(IMongoDatabase db, TimeProvider clock)
 {
@@ -212,9 +214,19 @@ public class UserService(IMongoDatabase db, TimeProvider clock)
         if (req.WardId is not null) updates.Add(u.Set(x => x.WardId, req.WardId));
         if (req.HidePhone is { } hp) updates.Add(u.Set(x => x.HidePhone, hp));
         if (req.AvatarMediaId is not null) updates.Add(u.Set(x => x.AvatarMediaId, req.AvatarMediaId));
+        if (req.Email is { } email)
+        {
+            email = email.Trim().ToLowerInvariant();
+            if (email.Length == 0) updates.Add(u.Unset(x => x.Email));
+            else if (!IsValidEmail(email)) throw new DomainException("INVALID_EMAIL", "Email không hợp lệ");
+            else updates.Add(u.Set(x => x.Email, email));
+        }
         if (updates.Count > 0) await Users.UpdateOneAsync(x => x.Id == id, u.Combine(updates), cancellationToken: ct);
         return await GetAsync(id, ct);
     }
+
+    static readonly Regex EmailPattern = new(@"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    public static bool IsValidEmail(string email) => email.Length <= 254 && EmailPattern.IsMatch(email);
 
     public Task SetFlagAsync(string id, System.Linq.Expressions.Expression<Func<User, bool>> flag, bool value, CancellationToken ct = default) =>
         Users.UpdateOneAsync(x => x.Id == id, Builders<User>.Update.Set(flag, value), cancellationToken: ct);

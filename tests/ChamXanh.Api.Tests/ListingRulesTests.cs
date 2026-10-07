@@ -90,11 +90,51 @@ public class ListingRulesTests
         Assert.Empty(errors);
         Assert.Equal(15d, values["chieuCao"]);
 
-        input["tinhTrang"] = JsonSerializer.SerializeToElement("Không có");
+        // Ô dạng chọn chỉ là gợi ý: giá trị tự gõ hợp lệ; gõ trùng gợi ý thì lưu đúng chữ của gợi ý.
+        input["tinhTrang"] = JsonSerializer.SerializeToElement("Ghép gốc  sẵn");
+        Assert.Equal("Ghép gốc sẵn", AttributeValidator.Validate(SenDa, input).Values["tinhTrang"]);
+        input["tinhTrang"] = JsonSerializer.SerializeToElement("trồng CHẬU");
+        Assert.Equal("Trồng chậu", AttributeValidator.Validate(SenDa, input).Values["tinhTrang"]);
+
         input["la"] = JsonSerializer.SerializeToElement("x");
         input.Remove("chieuCao");
         var bad = AttributeValidator.Validate(SenDa, input).Errors;
-        Assert.Equal(3, bad.Count); // giá trị chọn sai, thiếu bắt buộc, khóa lạ
+        Assert.Equal(["chieuCao", "la"], bad.Select(e => e.Key).Order()); // thiếu bắt buộc, khóa lạ
+    }
+
+    [Fact]
+    public void Plant_specific_attributes_are_optional_but_supplies_keep_required()
+    {
+        var lan = new Category
+        {
+            Id = "lan", Level = 2, IsLivePlant = true,
+            Attributes =
+            [
+                new() { Key = "tinhTrang", Label = "Tình trạng cây", Type = AttributeType.SingleSelect, Options = ["Trồng chậu"], Required = true },
+                new() { Key = "loaiLan", Label = "Loại lan", Type = AttributeType.SingleSelect, Options = ["Hồ điệp"], Required = true },
+            ],
+        };
+        var errors = AttributeValidator.Validate(lan, new Dictionary<string, JsonElement> { ["tinhTrang"] = JsonSerializer.SerializeToElement("Trồng chậu") }).Errors;
+        Assert.Empty(errors);
+
+        var phanBon = new Category
+        {
+            Id = "phan-bon", Level = 2,
+            Attributes = [new() { Key = "soGiayPhep", Label = "Số giấy phép", Type = AttributeType.Text, Required = true }],
+        };
+        Assert.Single(AttributeValidator.Validate(phanBon, null).Errors);
+    }
+
+    [Fact]
+    public void Manual_review_matches_free_text_without_diacritics()
+    {
+        var cat = new Category
+        {
+            Id = "bonsai", Level = 2, IsLivePlant = true,
+            Attributes = [new() { Key = "nguonGoc", Label = "Nguồn gốc", Type = AttributeType.SingleSelect, Options = ["Phôi rừng"], ManualReviewValues = ["Phôi rừng"] }],
+        };
+        Assert.True(AttributeValidator.NeedsManualReview(cat, new Dictionary<string, object> { ["nguonGoc"] = "phoi rung Tây Bắc" }));
+        Assert.False(AttributeValidator.NeedsManualReview(cat, new Dictionary<string, object> { ["nguonGoc"] = "Tự tạo" }));
     }
 
     static RiskContext Ctx(string title = "Sen đá kim tuyến chậu nhỏ", string desc = "Cây khỏe mạnh, lên màu đẹp", Category? cat = null,

@@ -2,8 +2,10 @@ using System.Security.Claims;
 using ChamXanh.Api.Common;
 using ChamXanh.Api.Common.Auth;
 using ChamXanh.Api.Modules.Catalog;
+using ChamXanh.Api.Modules.Identity;
 using ChamXanh.Api.Modules.Media;
 using ChamXanh.Api.Modules.Notifications;
+using ChamXanh.Api.Modules.Plans;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
@@ -95,7 +97,8 @@ public static class ReminderSchedule
     };
 }
 
-public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogService catalog, MediaService media, NotificationService notifications)
+public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogService catalog, MediaService media, NotificationService notifications,
+    PlanService plans, UserService users, IEmailSender email, EmailOptions emailOptions, ILogger<PlantCareService> logger)
 {
     const int MaxPlants = 300, MaxRemindersPerPlant = 10;
     public IMongoCollection<MyPlant> Plants { get; } = db.GetCollection<MyPlant>("myPlants");
@@ -113,6 +116,24 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
 
     public async Task<MyPlant> GetOwnAsync(string userId, string id, CancellationToken ct) =>
         await Plants.Find(p => p.Id == id && p.UserId == userId).FirstOrDefaultAsync(ct) ?? throw DomainException.NotFound("cây");
+
+    /// <summary>Cây vượt hạn mức gói (khi gói hết hạn): giữ N cây mới nhất hoạt động, các cây cũ hơn bị khóa —
+    /// vẫn xem và xóa được nhưng không sửa, không thêm lời nhắc, nhắc lịch tạm dừng.</summary>
+    public async Task<HashSet<string>> LockedIdsAsync(string userId, CancellationToken ct)
+    {
+        var (plan, _) = await plans.GetEffectiveAsync(userId, ct);
+        var ids = await Plants.Find(p => p.UserId == userId).SortByDescending(p => p.CreatedAt).ThenByDescending(p => p.Id)
+            .Project(p => p.Id).ToListAsync(ct);
+        return ids.Skip(plan.GardenPlants).ToHashSet();
+    }
+
+    async Task<MyPlant> GetUnlockedAsync(string userId, string id, CancellationToken ct)
+    {
+        var plant = await GetOwnAsync(userId, id, ct);
+        if ((await LockedIdsAsync(userId, ct)).Contains(id))
+            throw new DomainException("PLANT_LOCKED", "Cây này đang tạm khóa vì vượt số cây của gói hiện tại. Gia hạn gói hoặc xóa bớt cây để mở lại.");
+        return plant;
+    }
 
     async Task Apply(MyPlant p, PlantRequest req, string userId, CancellationToken ct)
     {
@@ -137,8 +158,15 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
 
     public async Task<MyPlant> CreateAsync(string userId, PlantRequest req, CancellationToken ct)
     {
-        if (await Plants.CountDocumentsAsync(p => p.UserId == userId, cancellationToken: ct) >= MaxPlants)
-            throw new DomainException("LIMIT_REACHED", $"Hồ sơ vườn tối đa {MaxPlants} cây");
+        var (plan, _) = await plans.GetEffectiveAsync(userId, ct);
+        var count = await Plants.CountDocumentsAsync(p => p.UserId == userId, cancellationToken: ct);
+        if (count >= Math.Min(plan.GardenPlants, MaxPlants))
+            throw new DomainException("PLAN_LIMIT", plan.Code switch
+            {
+                PlanCode.Free => $"Gói Miễn phí lưu tối đa {plan.GardenPlants} cây. Nâng lên {PlanCatalog.Plus.Name} để lưu {PlanCatalog.Plus.GardenPlants} cây, hoặc {PlanCatalog.Pro.Name} để lưu {PlanCatalog.Pro.GardenPlants} cây.",
+                PlanCode.Plus => $"Gói {plan.Name} lưu tối đa {plan.GardenPlants} cây. Nâng lên {PlanCatalog.Pro.Name} để lưu {PlanCatalog.Pro.GardenPlants} cây.",
+                _ => $"Gói {plan.Name} lưu tối đa {plan.GardenPlants} cây.",
+            }, details: new { limit = plan.GardenPlants, plan = plan.Code.ToString() });
         var p = new MyPlant { UserId = userId, CreatedAt = clock.GetUtcNow().UtcDateTime };
         await Apply(p, req, userId, ct);
         await Plants.InsertOneAsync(p, cancellationToken: ct);
@@ -147,7 +175,7 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
 
     public async Task<MyPlant> UpdateAsync(string userId, string id, PlantRequest req, CancellationToken ct)
     {
-        var p = await GetOwnAsync(userId, id, ct);
+        var p = await GetUnlockedAsync(userId, id, ct);
         await Apply(p, req, userId, ct);
         await Plants.ReplaceOneAsync(x => x.Id == id, p, cancellationToken: ct);
         return p;
@@ -163,7 +191,10 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
 
     public async Task<CareReminder> UpsertReminderAsync(string userId, string plantId, string? reminderId, ReminderRequest req, CancellationToken ct)
     {
-        await GetOwnAsync(userId, plantId, ct);
+        await GetUnlockedAsync(userId, plantId, ct);
+        // Nhắc lịch gửi qua email người dùng tự khai: chưa có email thì không bật được lời nhắc.
+        if ((req.Enabled ?? true) && string.IsNullOrEmpty((await users.GetAsync(userId, ct)).Email))
+            throw new DomainException("EMAIL_REQUIRED", "Nhập email nhận nhắc lịch trước khi đặt lời nhắc");
         var interval = req.Interval ?? 1;
         if (interval is < 1 or > 365) throw new DomainException("INVALID_INTERVAL", "Chu kỳ lặp từ 1 đến 365");
         if (req.Note?.Length > 300) throw new DomainException("INVALID_NOTE", "Ghi chú tối đa 300 ký tự");
@@ -195,6 +226,8 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
     {
         var now = clock.GetUtcNow().UtcDateTime;
         var due = await Reminders.Find(r => r.Enabled && r.NextAt != null && r.NextAt <= now).Limit(500).ToListAsync(ct);
+        var locked = new Dictionary<string, HashSet<string>>();
+        var emails = new Dictionary<string, string?>();
         foreach (var r in due)
         {
             var next = ReminderSchedule.NextAfter(r, now);
@@ -204,10 +237,42 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
             if (claimed.ModifiedCount == 0) continue;
             var plant = await Plants.Find(p => p.Id == r.PlantId).FirstOrDefaultAsync(ct);
             if (plant is null) continue;
-            await notifications.SendAsync(r.UserId, "care." + r.Kind.ToString().ToLowerInvariant(),
-                $"{ReminderSchedule.Label(r.Kind)}: {plant.Name}", r.Note, $"/vuon-cua-toi?cay={plant.Id}", ct);
+            // Cây bị khóa do gói hết hạn: bỏ qua lần nhắc này (lịch vẫn chạy tiếp, gia hạn là nhắc lại ngay).
+            if (!locked.TryGetValue(r.UserId, out var lockedIds)) locked[r.UserId] = lockedIds = await LockedIdsAsync(r.UserId, ct);
+            if (lockedIds.Contains(plant.Id)) continue;
+            // Người dùng đã xóa email: không gửi nhắc (tính năng nhắc lịch cần email).
+            if (!emails.TryGetValue(r.UserId, out var to))
+                emails[r.UserId] = to = (await users.Users.Find(u => u.Id == r.UserId).Project(u => u.Email).FirstOrDefaultAsync(ct));
+            if (string.IsNullOrEmpty(to)) continue;
+            var title = $"{ReminderSchedule.Label(r.Kind)}: {plant.Name}";
+            var link = $"/vuon-cua-toi?cay={plant.Id}";
+            await notifications.SendAsync(r.UserId, "care." + r.Kind.ToString().ToLowerInvariant(), title, r.Note, link, ct);
+            try { await email.SendAsync(ReminderEmail(to, title, plant, r, emailOptions.WebBaseUrl.TrimEnd('/') + link), ct); }
+            catch (Exception ex) when (ex is System.Net.Mail.SmtpException or InvalidOperationException or IOException or FormatException)
+            {
+                logger.LogWarning(ex, "Không gửi được email nhắc lịch {ReminderId}", r.Id);
+            }
         }
         return due.Count;
+    }
+
+    static EmailMessage ReminderEmail(string to, string title, MyPlant plant, CareReminder r, string url)
+    {
+        Func<string?, string?> enc = System.Net.WebUtility.HtmlEncode;
+        var note = string.IsNullOrWhiteSpace(r.Note) ? "" : $"Ghi chú: {r.Note}\n";
+        var text = $"Đến giờ {ReminderSchedule.Label(r.Kind).ToLowerInvariant()} cho cây \"{plant.Name}\".\n{note}\nXem cây và lịch nhắc: {url}\n\nChạm Xanh";
+        var where = string.IsNullOrWhiteSpace(plant.Location) ? "" : $" ({enc(plant.Location)})";
+        var noteHtml = string.IsNullOrWhiteSpace(r.Note) ? "" : "<p style=\"background:#ecfdf5;padding:10px 14px;border-radius:12px\">" + enc(r.Note) + "</p>";
+        var html = $"""
+            <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#1c1917">
+              <h2 style="color:#14532d;margin:0 0 8px">{enc(title)}</h2>
+              <p>Đến giờ <b>{enc(ReminderSchedule.Label(r.Kind).ToLowerInvariant())}</b> cho cây <b>{enc(plant.Name)}</b>{where}.</p>
+              {noteHtml}
+              <p><a href="{enc(url)}" style="display:inline-block;background:#166534;color:#fff;padding:10px 18px;border-radius:999px;text-decoration:none">Mở Hồ sơ vườn</a></p>
+              <p style="color:#78716c;font-size:12px">Bạn nhận email này vì đã bật nhắc lịch trong Hồ sơ vườn Chạm Xanh. Tắt lời nhắc hoặc xóa email trong trang Tài khoản để ngừng nhận.</p>
+            </div>
+            """;
+        return new EmailMessage(to, $"[Chạm Xanh] {title}", text, html);
     }
 }
 
@@ -244,14 +309,15 @@ public static class PlantCareEndpoints
             var reminders = await svc.Reminders.Find(r => r.UserId == userId).ToListAsync(ct);
             var mediaIds = plants.SelectMany(x => x.MediaIds).ToList();
             var items = await media.Items.Find(m => mediaIds.Contains(m.Id)).ToListAsync(ct);
-            return plants.Select(x => ToDto(x, reminders.Where(r => r.PlantId == x.Id), items));
+            var locked = await svc.LockedIdsAsync(userId, ct);
+            return plants.Select(x => ToDto(x, reminders.Where(r => r.PlantId == x.Id), items, locked.Contains(x.Id)));
         });
         g.MapGet("/plants/{id}", async (string id, ClaimsPrincipal p, PlantCareService svc, MediaService media, CancellationToken ct) =>
         {
             var plant = await svc.GetOwnAsync(p.UserId(), id, ct);
             var reminders = await svc.Reminders.Find(r => r.PlantId == id).ToListAsync(ct);
             var items = await media.Items.Find(m => plant.MediaIds.Contains(m.Id)).ToListAsync(ct);
-            return ToDto(plant, reminders, items);
+            return ToDto(plant, reminders, items, (await svc.LockedIdsAsync(p.UserId(), ct)).Contains(id));
         });
         g.MapPost("/plants", async (PlantRequest req, ClaimsPrincipal p, PlantCareService svc, CancellationToken ct) =>
             await svc.CreateAsync(p.UserId(), req, ct));
@@ -278,16 +344,18 @@ public static class PlantCareEndpoints
         {
             var userId = p.UserId();
             var until = clock.GetUtcNow().UtcDateTime.AddDays(Math.Clamp(days ?? 7, 1, 60));
-            var list = await svc.Reminders.Find(r => r.UserId == userId && r.Enabled && r.NextAt != null && r.NextAt <= until).SortBy(r => r.NextAt).Limit(100).ToListAsync(ct);
+            var locked = await svc.LockedIdsAsync(userId, ct);
+            var list = (await svc.Reminders.Find(r => r.UserId == userId && r.Enabled && r.NextAt != null && r.NextAt <= until).SortBy(r => r.NextAt).Limit(100).ToListAsync(ct))
+                .Where(r => !locked.Contains(r.PlantId)).ToList();
             var ids = list.Select(r => r.PlantId).Distinct().ToList();
             var names = (await svc.Plants.Find(x => ids.Contains(x.Id)).ToListAsync(ct)).ToDictionary(x => x.Id, x => x.Name);
             return list.Select(r => new { r.Id, r.PlantId, plantName = names.GetValueOrDefault(r.PlantId), r.Kind, label = ReminderSchedule.Label(r.Kind), r.NextAt, r.Note });
         });
     }
 
-    static object ToDto(MyPlant p, IEnumerable<CareReminder> reminders, List<MediaItem> media) => new
+    static object ToDto(MyPlant p, IEnumerable<CareReminder> reminders, List<MediaItem> media, bool locked) => new
     {
-        p.Id, p.Name, p.SpeciesId, p.SpeciesName, p.Location, p.AcquiredAt, p.Note, p.CreatedAt,
+        p.Id, p.Name, p.SpeciesId, p.SpeciesName, p.Location, p.AcquiredAt, p.Note, p.CreatedAt, locked,
         photos = p.MediaIds.Select(id => media.FirstOrDefault(m => m.Id == id)).Where(m => m is not null).Select(m => MediaService.ToDto(m!)),
         reminders = reminders.OrderBy(r => r.NextAt ?? DateTime.MaxValue),
     };

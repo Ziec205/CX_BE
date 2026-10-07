@@ -31,6 +31,8 @@ public class User
     public string? ProvinceId { get; set; }
     public string? WardId { get; set; }
     public string? AvatarMediaId { get; set; }
+    /// <summary>Email người dùng tự khai, dùng để gửi nhắc lịch chăm cây. Chưa có email thì không đặt được lời nhắc.</summary>
+    [BsonIgnoreIfNull] public string? Email { get; set; }
     public bool HidePhone { get; set; }
     public UserFlags Flags { get; set; } = new();
     [BsonRepresentation(BsonType.String)] public UserStatus Status { get; set; } = UserStatus.Active;
