@@ -29,6 +29,12 @@ public static class PlanEndpoints
             plans = PlanCatalog.All.Select(PlanDto), terms = PlanCatalog.Terms, simulator = gateway.IsSimulator,
         }).WithTags("Plans");
 
+        // Link quay về từ PayOS: xem / hủy đơn bằng mã đơn + mã số đơn, không cần phiên đăng nhập.
+        app.MapGet("/api/plans/payments/{id}/status", async (string id, long ma, PlanService plans, CancellationToken ct) =>
+            PaymentDto(await plans.SyncAsync(await plans.GetByLinkAsync(id, ma, ct), ct))).WithTags("Plans");
+        app.MapPost("/api/plans/payments/{id}/status/cancel", async (string id, long ma, PlanService plans, CancellationToken ct) =>
+            PaymentDto(await plans.CancelAsync(await plans.GetByLinkAsync(id, ma, ct), ct))).WithTags("Plans");
+
         var me = app.MapGroup("/api").WithTags("Plans").RequireAuthorization(Policies.Member);
 
         me.MapGet("/me/plan", async (ClaimsPrincipal p, PlanService plans, AiQuotaService quota, PlantCareService care, CancellationToken ct) =>

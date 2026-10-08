@@ -199,6 +199,32 @@ public class PlanApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     }
 
     [Fact]
+    public async Task Payos_returns_to_the_users_own_site_and_result_page_works_without_login()
+    {
+        var (c, _) = await Member();
+        var pay = await (await c.PostAsJsonAsync("/api/plans/checkout", new { plan = "Plus", months = 1, returnOrigin = "https://evil.example" })).EnsureOk();
+        Assert.StartsWith("http://localhost:3000/goi/gia-lap", pay.GetProperty("checkoutUrl").GetString()); // tên miền lạ: dùng địa chỉ mặc định
+        var id = pay.GetProperty("id").GetString();
+        var ma = pay.GetProperty("orderCode").GetInt64();
+
+        var anon = Anonymous();
+        var status = await (await anon.GetAsync($"/api/plans/payments/{id}/status?ma={ma}")).EnsureOk();
+        Assert.Equal("Pending", status.GetProperty("status").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync($"/api/plans/payments/{id}/status?ma={ma + 1}")).StatusCode);
+        var cancelled = await (await anon.PostAsync($"/api/plans/payments/{id}/status/cancel?ma={ma}", null)).EnsureOk();
+        Assert.Equal("Cancelled", cancelled.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void Return_origin_must_be_allowed()
+    {
+        var o = new PayOsOptions { ReturnBaseUrl = "https://chamxanh.vn", AllowedReturnOrigins = ["https://cham-xanh.vercel.app"] };
+        Assert.Equal("https://cham-xanh.vercel.app", o.ResolveWebBase("https://cham-xanh.vercel.app/goi"));
+        Assert.Equal("https://chamxanh.vn", o.ResolveWebBase("https://evil.example"));
+        Assert.Equal("https://chamxanh.vn", o.ResolveWebBase(null));
+    }
+
+    [Fact]
     public async Task Guests_cannot_use_ai()
     {
         var res = await Anonymous().PostAsJsonAsync("/api/ai/chat", new { message = "Xin chào" });

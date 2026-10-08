@@ -27,7 +27,8 @@ public class AdminUser
 public class AdminOptions
 {
     /// <summary>BR-ADM-03: bắt buộc 2FA. Chỉ tắt ở môi trường dev/test.</summary>
-    public bool Require2fa { get; set; } = true;
+    /// <summary>Tắt mặc định theo yêu cầu (08/10/2026): admin đăng nhập bằng tên + mật khẩu. Bật lại bằng biến Admin__Require2fa=true.</summary>
+    public bool Require2fa { get; set; }
     public string? BootstrapUsername { get; set; }
     public string? BootstrapPassword { get; set; }
     /// <summary>Chỉ bật ở Development: cho tài khoản bootstrap dùng mật khẩu ngắn (vd admin/123) để thử nhanh. Production luôn tắt.</summary>
@@ -88,7 +89,7 @@ public class AdminAuthService(IMongoDatabase db, TokenService tokens, AdminOptio
         if (admin.LockedUntil > now) throw DomainException.TooMany("Tài khoản admin tạm khóa do đăng nhập sai nhiều lần");
 
         var ok = _hasher.VerifyHashedPassword(admin, admin.PasswordHash, req.Password) != PasswordVerificationResult.Failed;
-        if (ok && admin.TotpEnabled) ok = VerifyTotp(admin.TotpSecret!, req.TotpCode);
+        if (ok && admin.TotpEnabled && options.Require2fa) ok = VerifyTotp(admin.TotpSecret!, req.TotpCode);
         if (!ok)
         {
             var fails = admin.FailedLogins + 1;

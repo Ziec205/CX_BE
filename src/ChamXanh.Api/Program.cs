@@ -209,6 +209,7 @@ services.AddStartupTask(async (sp, _) =>
 // Gói Plus/Pro thanh toán qua PayOS. Chưa có khóa PayOS: dùng cổng giả lập (chỉ khi AllowSimulator, mặc định bật ở Development).
 var payOsOptions = config.GetSection("PayOS").Get<PayOsOptions>() ?? new PayOsOptions();
 if (builder.Environment.IsDevelopment() && config["PayOS:AllowSimulator"] is null) payOsOptions.AllowSimulator = true;
+payOsOptions.AllowedReturnOrigins.AddRange(config.GetSection("Cors:Origins").Get<string[]>() ?? []);
 services.AddSingleton(payOsOptions);
 if (payOsOptions.IsConfigured)
     services.AddHttpClient<IPlanPaymentGateway, PayOsGateway>(c => c.Timeout = TimeSpan.FromSeconds(20));

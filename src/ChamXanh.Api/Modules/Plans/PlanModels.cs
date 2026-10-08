@@ -94,4 +94,5 @@ public class PlanPayment
     public DateTime? AppliedEndAt { get; set; }
 }
 
-public record CheckoutRequest(PlanCode Plan, int Months);
+/// <summary>ReturnOrigin: địa chỉ web người dùng đang dùng (window.location.origin), để PayOS đưa về đúng tên miền.</summary>
+public record CheckoutRequest(PlanCode Plan, int Months, string? ReturnOrigin = null);

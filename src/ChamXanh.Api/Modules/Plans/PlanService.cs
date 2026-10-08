@@ -52,11 +52,12 @@ public class PlanService(IMongoDatabase db, IMongoClient client, IPlanPaymentGat
             UserId = userId, Plan = req.Plan, Months = req.Months, AmountVnd = PlanCatalog.Price(plan, req.Months),
             OrderCode = NewOrderCode(now), Gateway = gateway.Name, CreatedAt = now, ExpiresAt = now.AddMinutes(options.LinkExpiryMinutes),
         };
-        var web = options.ReturnBaseUrl.TrimEnd('/');
+        var web = options.ResolveWebBase(req.ReturnOrigin);
         // Tham số riêng "thanhToan": PayOS tự thêm id, code, status, orderCode vào URL quay về.
         var link = await gateway.CreateAsync(new PaymentLinkRequest(payment.OrderCode, payment.AmountVnd,
             $"CX{(req.Plan == PlanCode.Pro ? "PRO" : "PLUS")}{req.Months}", $"{plan.Name} {req.Months} tháng",
-            $"{web}/goi/ket-qua?thanhToan={payment.Id}", $"{web}/goi/ket-qua?thanhToan={payment.Id}&huy=1", payment.ExpiresAt), ct);
+            $"{web}/goi/ket-qua?thanhToan={payment.Id}&ma={payment.OrderCode}", $"{web}/goi/ket-qua?thanhToan={payment.Id}&ma={payment.OrderCode}&huy=1",
+            payment.ExpiresAt, web), ct);
         payment.PaymentLinkId = link.PaymentLinkId;
         payment.CheckoutUrl = link.CheckoutUrl;
         await Payments.InsertOneAsync(payment, cancellationToken: ct);
@@ -66,6 +67,11 @@ public class PlanService(IMongoDatabase db, IMongoClient client, IPlanPaymentGat
     /// <summary>Số nguyên ≤ 2^53 (giới hạn của PayOS), gần như không trùng; trùng thì index unique chặn lại.</summary>
     static long NewOrderCode(DateTime now) =>
         new DateTimeOffset(now).ToUnixTimeMilliseconds() * 100 + Random.Shared.Next(100);
+
+    /// <summary>Trang kết quả mở được cả khi trình duyệt mất phiên đăng nhập: cần đủ mã đơn và mã số đơn trên link quay về.</summary>
+    public async Task<PlanPayment> GetByLinkAsync(string id, long orderCode, CancellationToken ct) =>
+        (MongoDB.Bson.ObjectId.TryParse(id, out _) ? await Payments.Find(p => p.Id == id && p.OrderCode == orderCode).FirstOrDefaultAsync(ct) : null)
+        ?? throw DomainException.NotFound("đơn thanh toán");
 
     public async Task<PlanPayment> GetOwnPaymentAsync(string userId, string id, CancellationToken ct) =>
         (MongoDB.Bson.ObjectId.TryParse(id, out _) ? await Payments.Find(p => p.Id == id && p.UserId == userId).FirstOrDefaultAsync(ct) : null)

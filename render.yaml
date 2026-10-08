@@ -31,6 +31,8 @@ services:
         value: https://chamxanh.vn
       - key: Cors__Origins__1
         value: https://admin.chamxanh.vn
+      - key: Cors__Origins__2
+        value: https://cx-fe-web.vercel.app   # tên miền web hiện tại; PayOS được phép đưa người dùng về đây
       # Gói Xanh Plus/Pro thanh toán qua PayOS: lấy 3 khóa trong kênh thanh toán PayOS (my.payos.vn).
       # Đặt webhook của kênh là https://<api>/api/payments/payos/webhook
       - key: PayOS__ClientId
@@ -40,7 +42,7 @@ services:
       - key: PayOS__ChecksumKey
         sync: false
       - key: PayOS__ReturnBaseUrl
-        value: https://chamxanh.vn  # web mà PayOS đưa người dùng quay về sau khi trả tiền
+        value: https://cx-fe-web.vercel.app  # web mà PayOS đưa người dùng quay về sau khi trả tiền (tên miền đang chạy)
       # Trợ lý AI: khóa Google AI Studio (aistudio.google.com → Get API key).
       - key: Gemini__ApiKey
         sync: false
@@ -57,4 +59,4 @@ services:
       - key: Email__From
         sync: false
       - key: Email__WebBaseUrl
-        value: https://chamxanh.vn
+        value: https://cx-fe-web.vercel.app

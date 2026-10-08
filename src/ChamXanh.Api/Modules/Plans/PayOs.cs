@@ -15,6 +15,20 @@ public class PayOsOptions
     public string BaseUrl { get; set; } = "https://api-merchant.payos.vn";
     /// <summary>Địa chỉ web để PayOS đưa người dùng quay về (vd https://chamxanh.vn).</summary>
     public string ReturnBaseUrl { get; set; } = "http://localhost:3000";
+    /// <summary>Các địa chỉ web khác được phép làm nơi quay về (vd tên miền Vercel). Cors:Origins cũng được tính.</summary>
+    public List<string> AllowedReturnOrigins { get; set; } = [];
+
+    /// <summary>Quay về đúng tên miền người dùng đang dùng (để còn cookie đăng nhập), nếu nằm trong danh sách cho phép;
+    /// không thì dùng ReturnBaseUrl. Chặn chuyển hướng sang trang lạ.</summary>
+    public string ResolveWebBase(string? origin)
+    {
+        var fallback = ReturnBaseUrl.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(origin) || !Uri.TryCreate(origin.Trim(), UriKind.Absolute, out var u)) return fallback;
+        var o = u.GetLeftPart(UriPartial.Authority);
+        var allowed = AllowedReturnOrigins.Append(ReturnBaseUrl)
+            .Select(x => Uri.TryCreate(x.Trim(), UriKind.Absolute, out var a) ? a.GetLeftPart(UriPartial.Authority) : null);
+        return allowed.Any(a => string.Equals(a, o, StringComparison.OrdinalIgnoreCase)) ? o : fallback;
+    }
     /// <summary>Khi chưa có khóa: cho phép thanh toán giả lập để thử luồng. Chỉ bật khi phát triển/demo, không bao giờ ở production thật.</summary>
     public bool AllowSimulator { get; set; }
     public int LinkExpiryMinutes { get; set; } = 15;
@@ -22,7 +36,7 @@ public class PayOsOptions
     public bool IsConfigured => ClientId.Length > 0 && ApiKey.Length > 0 && ChecksumKey.Length > 0;
 }
 
-public record PaymentLinkRequest(long OrderCode, long Amount, string Description, string ItemName, string ReturnUrl, string CancelUrl, DateTime ExpiresAt);
+public record PaymentLinkRequest(long OrderCode, long Amount, string Description, string ItemName, string ReturnUrl, string CancelUrl, DateTime ExpiresAt, string WebBase);
 public record PaymentLink(string? PaymentLinkId, string CheckoutUrl);
 public enum GatewayState { Pending, Paid, Cancelled, Expired }
 public record GatewayStatus(GatewayState State, long AmountPaid, string? Reference);
@@ -144,7 +158,7 @@ public class SimulatedPlanGateway(PayOsOptions options) : IPlanPaymentGateway
     {
         if (!options.AllowSimulator)
             throw new DomainException("PAYMENT_NOT_CONFIGURED", "Thanh toán chưa được cấu hình, vui lòng thử lại sau", StatusCodes.Status503ServiceUnavailable);
-        return Task.FromResult(new PaymentLink(null, $"{options.ReturnBaseUrl.TrimEnd('/')}/goi/gia-lap?ma={req.OrderCode}"));
+        return Task.FromResult(new PaymentLink(null, $"{req.WebBase}/goi/gia-lap?ma={req.OrderCode}"));
     }
 
     public Task<GatewayStatus?> GetAsync(long orderCode, CancellationToken ct) => Task.FromResult<GatewayStatus?>(null);
