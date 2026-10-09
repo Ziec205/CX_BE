@@ -108,7 +108,7 @@ public class CatalogService(IMongoDatabase db, TimeProvider clock, IServiceProvi
         if (!string.IsNullOrWhiteSpace(categoryId)) filter &= f.AnyEq(s => s.CategoryIds, categoryId);
         var norm = VietnameseText.Normalize(q);
         if (norm.Length > 0) filter &= f.Regex("searchTerms", new MongoDB.Bson.BsonRegularExpression(Regex.Escape(norm)));
-        return await Species.Find(filter).SortBy(s => s.CommonName).Limit(Math.Clamp(limit, 1, 50)).ToListAsync(ct);
+        return await Species.Find(filter).SortBy(s => s.CommonName).Limit(Math.Clamp(limit, 1, 500)).ToListAsync(ct);
     }
 
     /// <summary>Tìm loài khớp theo tên (cả tên khác), dùng cho mở rộng từ đồng nghĩa khi tìm tin.</summary>
