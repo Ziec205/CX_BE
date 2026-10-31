@@ -106,9 +106,8 @@ public class ChatService(IMongoDatabase db, TimeProvider clock, UserService user
                 throw new DomainException("INVALID_MESSAGE", "Loại tin nhắn không hỗ trợ");
         }
 
-        var listing = await listings.Listings.Find(l => l.Id == conv.ListingId).FirstOrDefaultAsync(ct);
         var isFirstFromSender = !await Messages.Find(m => m.ConversationId == conv.Id && m.SenderId == userId).AnyAsync(ct);
-        msg.Warning = ScamDetector.Check(msg.Text, listing?.EscrowEnabled == true, sender.CreatedAt > Now.AddDays(-7), isFirstFromSender);
+        msg.Warning = ScamDetector.Check(msg.Text, sender.CreatedAt > Now.AddDays(-7), isFirstFromSender);
 
         await Messages.InsertOneAsync(msg, cancellationToken: ct);
         await TouchAsync(conv, msg, ct);

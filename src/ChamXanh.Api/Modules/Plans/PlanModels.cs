@@ -3,23 +3,27 @@ using MongoDB.Bson.Serialization.Attributes;
 
 namespace ChamXanh.Api.Modules.Plans;
 
-// Gói sử dụng cho người dùng (khác gói Trang vườn trả bằng Xu): mở rộng Hồ sơ vườn và lượt dùng Trợ lý AI.
+// Gói sử dụng: hạn mức đăng tin mỗi tháng, Hồ sơ vườn và lượt Trợ lý AI. Hết lượt đăng tin thì mỗi tin thêm trừ Xu trong ví.
 
 public enum PlanCode { Free, Plus, Pro }
 
 public record PlanDefinition(
     PlanCode Code, string Name, string Tagline, long MonthlyVnd, long YearlyVnd,
-    int GardenPlants, int AiPerDay, bool MarketCompare, bool SellerAi);
+    int GardenPlants, int AiPerDay, bool MarketCompare, bool SellerAi,
+    int ListingsPerMonth, long ExtraListingXu, int ListingDays);
 
 public static class PlanCatalog
 {
     public static readonly PlanDefinition Free = new(PlanCode.Free, "Miễn phí", "Dùng thử Hồ sơ vườn và Trợ lý AI",
-        0, 0, GardenPlants: 3, AiPerDay: 3, MarketCompare: false, SellerAi: false);
+        0, 0, GardenPlants: 3, AiPerDay: 3, MarketCompare: false, SellerAi: false,
+        ListingsPerMonth: 3, ExtraListingXu: 10, ListingDays: 30);
     public static readonly PlanDefinition Plus = new(PlanCode.Plus, "Xanh Plus", "Chăm nhiều cây hơn, hỏi AI mỗi ngày",
-        39_000, 390_000, GardenPlants: 20, AiPerDay: 15, MarketCompare: false, SellerAi: false);
-    /// <summary>Nhà vườn chuyên nghiệp / người dùng AI nhiều: thêm so sánh cây trong chợ và công cụ bán hàng bằng AI.</summary>
-    public static readonly PlanDefinition Pro = new(PlanCode.Pro, "Xanh Pro", "Cho nhà vườn chuyên nghiệp và người dùng AI nhiều",
-        69_000, 690_000, GardenPlants: 100, AiPerDay: 40, MarketCompare: true, SellerAi: true);
+        39_000, 390_000, GardenPlants: 20, AiPerDay: 15, MarketCompare: false, SellerAi: false,
+        ListingsPerMonth: 30, ExtraListingXu: 5, ListingDays: 60);
+    /// <summary>Người bán nhiều / dùng AI nhiều: thêm so sánh cây trong chợ và công cụ bán hàng bằng AI.</summary>
+    public static readonly PlanDefinition Pro = new(PlanCode.Pro, "Xanh Pro", "Cho người bán nhiều và dùng AI nhiều",
+        69_000, 690_000, GardenPlants: 100, AiPerDay: 40, MarketCompare: true, SellerAi: true,
+        ListingsPerMonth: 100, ExtraListingXu: 5, ListingDays: 60);
 
     public static readonly IReadOnlyList<PlanDefinition> All = [Free, Plus, Pro];
 

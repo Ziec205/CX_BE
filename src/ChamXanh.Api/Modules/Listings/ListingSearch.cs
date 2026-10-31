@@ -13,26 +13,23 @@ public enum ListingSort { Newest, PriceAsc, PriceDesc, Nearest }
 
 public record ListingQuery(
     string? Q = null, ListingType? Type = null, string? CategoryId = null, string? RootCategoryId = null, string? SpeciesId = null,
-    string? ProvinceId = null, long? PriceMin = null, long? PriceMax = null, bool? GardenOnly = null, bool? EscrowOnly = null,
+    string? ProvinceId = null, long? PriceMin = null, long? PriceMax = null,
     bool? RealPhotoOnly = null, string? Pickup = null, int? PostedWithinDays = null, double? Lat = null, double? Lng = null,
     double? RadiusKm = null, ListingSort Sort = ListingSort.Newest, int Page = 1, int PageSize = 20,
     Dictionary<string, string>? Attr = null, string? SellerId = null, string? Use = null);
 
-public record SellerSummary(string Id, string DisplayName, string? AvatarMediaId, bool IsGarden, bool IsVerifiedGarden, bool IsProSeller);
+public record SellerSummary(string Id, string DisplayName, string? AvatarMediaId);
 
 public record ListingCard(
     string Id, string Type, string Title, long? Price, string PriceMode, long? PriceRefMin, long? PriceRefMax,
     long? BudgetMin, long? BudgetMax, RentTerms? Rent, string CategoryId, string? SpeciesId, string ProvinceId, string? WardId,
-    string? ThumbUrl, int PhotoCount, bool RealPhoto, bool Escrow, bool IsPriority, string? Highlight, DateTime? BumpedAt,
+    string? ThumbUrl, int PhotoCount, bool RealPhoto, DateTime? BumpedAt,
     string Status, int Available, string Unit, double? DistanceKm, SellerSummary Seller);
 
-public record SearchResult(List<ListingCard> Priority, List<ListingCard> Items, long Total, int Page, int PageSize);
+public record SearchResult(List<ListingCard> Items, long Total, int Page, int PageSize);
 
 public class ListingSearch(ListingService listings, CatalogService catalog, UserService users, ListingOptions options, TimeProvider clock)
 {
-    const int PrioritySlotsPerPage = 3;    // BR-SRC-01
-    const int MaxPriorityPerSeller = 2;    // BR-SRC-03
-
     public async Task<SearchResult> SearchAsync(ListingQuery q, CancellationToken ct)
     {
         var now = clock.GetUtcNow().UtcDateTime;
@@ -61,17 +58,8 @@ public class ListingSearch(ListingService listings, CatalogService catalog, User
             items = await coll.Find(filter).Sort(sort).Skip((page - 1) * size).Limit(size).ToListAsync(ct);
         }
 
-        // Khối Ưu tiên: chỉ tin VIP KHỚP bộ lọc (BR-SRC-02), xoay vòng ngẫu nhiên, tối đa 2 tin/người bán (BR-SRC-03).
-        var priorityFilter = filter & Builders<Listing>.Filter.Gt(l => l.PriorityUntil, now);
-        var pool = await coll.Aggregate().Match(priorityFilter).Sample(30).ToListAsync(ct);
-        var priority = pool.GroupBy(l => l.SellerId).SelectMany(g => g.Take(MaxPriorityPerSeller))
-            .OrderBy(_ => Random.Shared.Next()).Take(PrioritySlotsPerPage).ToList();
-
-        var sellers = await SellerSummariesAsync(items.Concat(priority).Select(l => l.SellerId), ct);
-        return new(
-            priority.Select(l => ToCard(l, sellers[l.SellerId], now, q, isPriority: true)).ToList(),
-            items.Select(l => ToCard(l, sellers[l.SellerId], now, q, l.PriorityUntil > now)).ToList(),
-            total, page, size);
+        var sellers = await SellerSummariesAsync(items.Select(l => l.SellerId), ct);
+        return new(items.Select(l => ToCard(l, sellers[l.SellerId], now, q)).ToList(), total, page, size);
     }
 
     async Task<FilterDefinition<Listing>> BuildFilterAsync(ListingQuery q, DateTime now, CancellationToken ct)
@@ -86,7 +74,6 @@ public class ListingSearch(ListingService listings, CatalogService catalog, User
         if (q.ProvinceId is not null) filter &= f.Eq(l => l.ProvinceId, q.ProvinceId);
         if (q.PriceMin is { } min) filter &= f.Gte(l => l.SortPrice, min);
         if (q.PriceMax is { } max) filter &= f.Lte(l => l.SortPrice, max);
-        if (q.EscrowOnly == true) filter &= f.Eq(l => l.EscrowEnabled, true);
         if (q.Use is not null) filter &= f.AnyEq(l => l.Uses, q.Use);
         if (q.Pickup is not null) filter &= f.AnyEq(l => l.PickupOptions, q.Pickup);
         if (q.PostedWithinDays is { } d) filter &= f.Gte(l => l.FirstPublishedAt, now.AddDays(-d));
@@ -95,11 +82,6 @@ public class ListingSearch(ListingService listings, CatalogService catalog, User
             // BR-LST-09 tính khi đọc: mọi ảnh chụp trong app và không có ảnh nào cũ hơn N ngày
             filter &= f.Not(f.ElemMatch(l => l.Media, m => !m.CapturedInApp))
                 & f.Not(f.ElemMatch(l => l.Media, m => m.CapturedAt == null || m.CapturedAt < now.AddDays(-options.RealPhotoMaxAgeDays)));
-        }
-        if (q.GardenOnly == true)
-        {
-            var gardenIds = await users.Users.Find(u => u.Flags.HasActivePlan).Project(u => u.Id).ToListAsync(ct);
-            filter &= f.In(l => l.SellerId, gardenIds);
         }
         if (q.Lat is { } lat && q.Lng is { } lng && q.Sort != ListingSort.Nearest)
             filter &= f.GeoWithinCenterSphere(l => l.Location, lng, lat, (q.RadiusKm ?? 50) / 6378.1);
@@ -145,11 +127,11 @@ public class ListingSearch(ListingService listings, CatalogService catalog, User
         var list = ids.Distinct().ToList();
         var found = await users.Users.Find(u => list.Contains(u.Id)).ToListAsync(ct);
         return list.ToDictionary(id => id, id => found.FirstOrDefault(u => u.Id == id) is { } u
-            ? new SellerSummary(u.Id, u.DisplayName, u.AvatarMediaId, u.Flags.HasActivePlan, u.Flags.HasVerifiedGarden, u.Flags.IsProSeller)
-            : new SellerSummary(id, "Người dùng", null, false, false, false));
+            ? new SellerSummary(u.Id, u.DisplayName, u.AvatarMediaId)
+            : new SellerSummary(id, "Người dùng", null));
     }
 
-    public ListingCard ToCard(Listing l, SellerSummary seller, DateTime now, ListingQuery? q = null, bool isPriority = false)
+    public ListingCard ToCard(Listing l, SellerSummary seller, DateTime now, ListingQuery? q = null)
     {
         double? distance = null;
         if (q?.Lat is { } lat && q.Lng is { } lng && l.Location is { } loc)
@@ -157,8 +139,7 @@ public class ListingSearch(ListingService listings, CatalogService catalog, User
         return new(l.Id, l.Type.ToString(), l.Title, l.Price, l.PriceMode.ToString(), l.PriceRefMin, l.PriceRefMax,
             l.BudgetMin, l.BudgetMax, l.Rent, l.CategoryId, l.SpeciesId, l.ProvinceId, l.WardId,
             l.Media.Count > 0 ? $"/media/{l.Media[0].MediaId}/card.webp" : null, l.Media.Count,
-            ListingRules.HasRealPhotoBadge(l.Media, now, options.RealPhotoMaxAgeDays), l.EscrowEnabled, isPriority,
-            l.HighlightUntil > now ? l.HighlightLabel : null, l.BumpedAt, l.Status.ToString(), l.Available, l.Unit, distance, seller);
+            ListingRules.HasRealPhotoBadge(l.Media, now, options.RealPhotoMaxAgeDays), l.BumpedAt, l.Status.ToString(), l.Available, l.Unit, distance, seller);
     }
 
     static double HaversineKm(double lat1, double lon1, double lat2, double lon2)

@@ -44,7 +44,6 @@ public class ListingReport
     [BsonRepresentation(BsonType.String)] public ReportReason Reason { get; set; }
     public string? Note { get; set; }
     public double Weight { get; set; }
-    public bool FromEscrowBuyer { get; set; }
     public string Status { get; set; } = "Open"; // Open | Accepted | Dismissed
     public DateTime CreatedAt { get; set; }
 }
@@ -208,7 +207,7 @@ public class ModerationService(IMongoDatabase db, TimeProvider clock, UserServic
 
     /// <summary>BR-MOD-01: trọng số báo cáo theo độ tin cậy tài khoản (sửa L19).</summary>
     public static double ReportWeight(User reporter, DateTime now) =>
-        reporter.Flags.HasVerifiedGarden || (reporter.CreatedAt <= now.AddDays(-30) && reporter.ActiveViolationPoints == 0) ? 1
+        reporter.CreatedAt <= now.AddDays(-30) && reporter.ActiveViolationPoints == 0 ? 1
         : reporter.CreatedAt > now.AddDays(-7) ? 0.3 : 0.5;
 
     /// <summary>BR-MOD-02: người báo cáo sai ≥ 5 lần trong 30 ngày mất quyền báo cáo 30 ngày.</summary>
@@ -219,11 +218,10 @@ public class ModerationService(IMongoDatabase db, TimeProvider clock, UserServic
         if (dismissed >= 5) throw DomainException.Forbidden("Bạn tạm thời không thể báo cáo do nhiều báo cáo không chính xác");
     }
 
-    public async Task<(double Weight, int Reporters, bool HasEscrowScam)> ReportStatsAsync(string listingId, CancellationToken ct)
+    public async Task<(double Weight, int Reporters)> ReportStatsAsync(string listingId, CancellationToken ct)
     {
         var open = await Reports.Find(r => r.ListingId == listingId && r.Status == "Open").ToListAsync(ct);
-        return (open.Sum(r => r.Weight), open.Select(r => r.ReporterId).Distinct().Count(),
-            open.Any(r => r.FromEscrowBuyer && r.Reason == ReportReason.Scam));
+        return (open.Sum(r => r.Weight), open.Select(r => r.ReporterId).Distinct().Count());
     }
 
     public Task SetReportsStatusAsync(string listingId, string status, CancellationToken ct) =>

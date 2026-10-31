@@ -228,6 +228,4 @@ public class UserService(IMongoDatabase db, TimeProvider clock)
     static readonly Regex EmailPattern = new(@"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     public static bool IsValidEmail(string email) => email.Length <= 254 && EmailPattern.IsMatch(email);
 
-    public Task SetFlagAsync(string id, System.Linq.Expressions.Expression<Func<User, bool>> flag, bool value, CancellationToken ct = default) =>
-        Users.UpdateOneAsync(x => x.Id == id, Builders<User>.Update.Set(flag, value), cancellationToken: ct);
 }

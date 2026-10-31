@@ -12,20 +12,14 @@ namespace ChamXanh.Api.Modules.Listings;
 public record ListingDetail(ListingCard Card, string Description, Dictionary<string, object> Attributes, List<string> PhotoUrls,
     string? VerificationPhotoUrl, List<string> PickupOptions, string? WantInExchange, DateTime? NeededBy, int Quantity, int Views,
     DateTime? FirstPublishedAt, DateTime? ExpiresAt, bool IsOwner, string? RejectReason, object? PendingRevision, string? RevisionRejectReason,
-    DateTime? PriorityUntil, bool AppealUsed, double? Lat, double? Lng, List<string> Uses);
+    bool AppealUsed, double? Lat, double? Lng, List<string> Uses, int ListingDays);
 
-public record SaveListingRequest(ListingInput Listing, bool Submit = true);
+/// <summary>AcceptFeeXu: số Xu người dùng đồng ý trả khi đã hết lượt đăng trong tháng.</summary>
+public record SaveListingRequest(ListingInput Listing, bool Submit = true, long? AcceptFeeXu = null);
+public record RenewRequest(long? AcceptFeeXu = null);
 public record RestockRequest(int Quantity);
 public record ReportRequest(ReportReason Reason, string? Note);
 public record AppealRequest(string Reason);
-public record ProxyListingRequest(string SellerId, ListingInput Listing);
-
-public class ProxyAuthorization
-{
-    [BsonId] public string SellerId { get; set; } = default!;
-    public DateTime GrantedAt { get; set; }
-    public DateTime ExpiresAt { get; set; }
-}
 
 public class PhoneView
 {
@@ -56,27 +50,31 @@ public static class ListingEndpoints
             if (!isOwner) await svc.Listings.UpdateOneAsync(x => x.Id == id, Builders<Listing>.Update.Inc(x => x.Views, 1), cancellationToken: ct);
             var sellers = await search.SellerSummariesAsync([l.SellerId], ct);
             var now = clock.GetUtcNow().UtcDateTime;
-            return new ListingDetail(search.ToCard(l, sellers[l.SellerId], now, isPriority: l.PriorityUntil > now), l.Description, l.Attributes,
+            return new ListingDetail(search.ToCard(l, sellers[l.SellerId], now), l.Description, l.Attributes,
                 l.Media.Select(m => $"/media/{m.MediaId}/full.webp").ToList(),
                 l.VerificationMediaId is null ? null : $"/media/{l.VerificationMediaId}/full.webp",
                 l.PickupOptions, l.WantInExchange, l.NeededBy, l.Quantity, l.Views, l.FirstPublishedAt, l.ExpiresAt, isOwner,
                 isOwner ? l.RejectReason : null, isOwner ? l.PendingRevision : null, isOwner ? l.RevisionRejectReason : null,
-                l.PriorityUntil, l.AppealUsed, l.Location?.Coordinates.Latitude, l.Location?.Coordinates.Longitude, l.Uses);
+                l.AppealUsed, l.Location?.Coordinates.Latitude, l.Location?.Coordinates.Longitude, l.Uses, l.ListingDays);
         });
 
         var member = app.MapGroup("/api").WithTags("Listings").RequireAuthorization(Policies.Member);
 
         member.MapPost("/listings", async (SaveListingRequest req, ClaimsPrincipal p, ListingService svc, CancellationToken ct) =>
-            Results.Ok(await svc.CreateAsync(p.UserId(), req.Listing, req.Submit, ct)));
+            Results.Ok(await svc.CreateAsync(p.UserId(), req.Listing, req.Submit, ct, req.AcceptFeeXu)));
         member.MapPut("/listings/{id}", async (string id, SaveListingRequest req, ClaimsPrincipal p, ListingService svc, CancellationToken ct) =>
             Results.Ok(await svc.UpdateAsync(id, p.UserId(), req.Listing, ct)));
-        member.MapPost("/listings/{id}/submit", (string id, ClaimsPrincipal p, ListingService svc, CancellationToken ct) => svc.SubmitAsync(id, p.UserId(), ct));
+        member.MapPost("/listings/{id}/submit", (string id, RenewRequest? req, ClaimsPrincipal p, ListingService svc, CancellationToken ct) =>
+            svc.SubmitAsync(id, p.UserId(), ct, req?.AcceptFeeXu));
         member.MapPost("/listings/{id}/hide", (string id, ClaimsPrincipal p, ListingService svc, CancellationToken ct) => svc.HideAsync(id, p.UserId(), ct));
         member.MapPost("/listings/{id}/unhide", (string id, ClaimsPrincipal p, ListingService svc, CancellationToken ct) => svc.UnhideAsync(id, p.UserId(), ct));
         member.MapPost("/listings/{id}/mark-sold", (string id, ClaimsPrincipal p, ListingService svc, CancellationToken ct) => svc.MarkSoldAsync(id, p.UserId(), ct));
         member.MapPost("/listings/{id}/restock", (string id, RestockRequest req, ClaimsPrincipal p, ListingService svc, CancellationToken ct) =>
             svc.RestockAsync(id, p.UserId(), req.Quantity, ct));
-        member.MapPost("/listings/{id}/renew", (string id, ClaimsPrincipal p, ListingService svc, CancellationToken ct) => svc.RenewAsync(id, p.UserId(), ct));
+        member.MapPost("/listings/{id}/renew", (string id, RenewRequest? req, ClaimsPrincipal p, ListingService svc, CancellationToken ct) =>
+            svc.RenewAsync(id, p.UserId(), ct, req?.AcceptFeeXu));
+        // Hạn mức đăng tin tháng này và phí tin tiếp theo, để form đăng tin báo trước khi trừ Xu.
+        member.MapGet("/me/listing-quota", (ClaimsPrincipal p, ListingFeeService fees, CancellationToken ct) => fees.GetQuotaAsync(p.UserId(), ct));
         member.MapDelete("/listings/{id}", async (string id, ClaimsPrincipal p, ListingService svc, CancellationToken ct) =>
         {
             await svc.DeleteAsync(id, p.UserId(), ct);
@@ -124,41 +122,15 @@ public static class ListingEndpoints
             var now = clock.GetUtcNow().UtcDateTime;
             return items.Select(l => new { card = search.ToCard(l, sellers[userId], now), l.RejectReason, hasPendingRevision = l.PendingRevision is not null, l.ExpiresAt });
         });
-
-        // Ủy quyền đăng tin hộ một lần, hiệu lực 90 ngày (BR-LST-14).
-        member.MapPost("/me/proxy-authorization", async (ClaimsPrincipal p, IMongoDatabase db, TimeProvider clock, CancellationToken ct) =>
-        {
-            var now = clock.GetUtcNow().UtcDateTime;
-            var auth = new ProxyAuthorization { SellerId = p.UserId(), GrantedAt = now, ExpiresAt = now.AddDays(90) };
-            await db.GetCollection<ProxyAuthorization>("proxyAuthorizations").ReplaceOneAsync(a => a.SellerId == auth.SellerId, auth, new ReplaceOptions { IsUpsert = true }, ct);
-            return auth;
-        });
-        member.MapDelete("/me/proxy-authorization", async (ClaimsPrincipal p, IMongoDatabase db, CancellationToken ct) =>
-        {
-            var userId = p.UserId();
-            await db.GetCollection<ProxyAuthorization>("proxyAuthorizations").DeleteOneAsync(a => a.SellerId == userId, ct);
-            return Results.NoContent();
-        });
-
-        app.MapPost("/api/admin/listings/proxy", async (ProxyListingRequest req, ClaimsPrincipal p, ListingService svc, IMongoDatabase db,
-            AuditService audit, TimeProvider clock, CancellationToken ct) =>
-        {
-            var now = clock.GetUtcNow().UtcDateTime;
-            var ok = await db.GetCollection<ProxyAuthorization>("proxyAuthorizations").Find(a => a.SellerId == req.SellerId && a.ExpiresAt > now).AnyAsync(ct);
-            if (!ok) throw DomainException.Forbidden("Người bán chưa ủy quyền đăng tin hộ hoặc ủy quyền đã hết hạn");
-            var listing = await svc.CreateAsync(req.SellerId, req.Listing, submit: true, ct, proxyActor: p.ActorName());
-            await audit.LogAsync(p, "listing.proxy_post", "listing", listing.Id, after: new { req.SellerId, listing.Title }, ct: ct);
-            return listing;
-        }).WithTags("Admin Listings").RequireAuthorization(Policies.ForPerm(Perm.ListingProxyPost));
     }
 }
 
 /// <summary>Tham số tìm kiếm trên query string. Bộ lọc động dạng attr.{key}=giá trị.</summary>
 public record ListingQueryParams(string? Q, ListingType? Type, string? CategoryId, string? RootCategoryId, string? SpeciesId, string? ProvinceId,
-    long? PriceMin, long? PriceMax, bool? GardenOnly, bool? EscrowOnly, bool? RealPhotoOnly, string? Pickup, int? PostedWithinDays,
+    long? PriceMin, long? PriceMax, bool? RealPhotoOnly, string? Pickup, int? PostedWithinDays,
     double? Lat, double? Lng, double? RadiusKm, ListingSort? Sort, int? Page, int? PageSize, string? SellerId, string? Use)
 {
     public ListingQuery ToQuery(IQueryCollection query) => new(Q, Type, CategoryId, RootCategoryId, SpeciesId, ProvinceId, PriceMin, PriceMax,
-        GardenOnly, EscrowOnly, RealPhotoOnly, Pickup, PostedWithinDays, Lat, Lng, RadiusKm, Sort ?? ListingSort.Newest, Page ?? 1, PageSize ?? 20,
+        RealPhotoOnly, Pickup, PostedWithinDays, Lat, Lng, RadiusKm, Sort ?? ListingSort.Newest, Page ?? 1, PageSize ?? 20,
         query.Where(kv => kv.Key.StartsWith("attr.")).ToDictionary(kv => kv.Key[5..], kv => kv.Value.ToString()), SellerId, Use);
 }

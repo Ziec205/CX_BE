@@ -58,15 +58,21 @@ public abstract class ApiTestBase(MongoFixture mongo) : IAsyncLifetime
         return c;
     }
 
-    /// <summary>Đăng nhập thành viên bằng OTP. Mặc định khai luôn họ tên + tỉnh để đủ điều kiện đăng tin.</summary>
+    /// <summary>Tạo thành viên bằng tên đăng nhập + mật khẩu, rồi gắn SĐT đã xác minh OTP (cho các test "Hiện số điện thoại").
+    /// Mặc định khai luôn họ tên + tỉnh để đủ điều kiện đăng tin.</summary>
     protected async Task<(HttpClient Client, string UserId)> Member(string? phone = null, bool completeProfile = true)
     {
-        phone ??= $"09{Interlocked.Increment(ref _phoneSeq):D8}";
+        var seq = Interlocked.Increment(ref _phoneSeq);
+        phone ??= $"09{seq:D8}";
         var anon = Anonymous();
-        var req = await (await anon.PostAsJsonAsync("/api/auth/otp/request", new { phone })).EnsureOk();
-        var code = req.GetProperty("devCode").GetString();
-        var auth = await (await anon.PostAsJsonAsync("/api/auth/otp/verify", new { phone, code })).EnsureOk();
+        // Mỗi thành viên một IP giả để không chạm giới hạn đăng ký theo IP.
+        anon.DefaultRequestHeaders.Add("X-Forwarded-For", $"10.{seq / 65536 % 256}.{seq / 256 % 256}.{seq % 256}");
+        var password = "mat-khau-test-1";
+        var auth = await (await anon.PostAsJsonAsync("/api/auth/register",
+            new { username = $"tv{phone}{Guid.NewGuid():N}"[..24], password, confirmPassword = password })).EnsureOk();
         var client = WithToken(auth.GetProperty("tokens").GetProperty("accessToken").GetString()!);
+        var otp = await (await client.PostAsJsonAsync("/api/me/phone/request", new { phone })).EnsureOk();
+        (await client.PostAsJsonAsync("/api/me/phone/verify", new { phone, code = otp.GetProperty("devCode").GetString() })).EnsureSuccessStatusCode();
         if (completeProfile)
             (await client.PutAsJsonAsync("/api/me", new { fullName = "Nguyễn Văn Test", provinceId = "79" })).EnsureSuccessStatusCode();
         // Email nhận nhắc lịch (bắt buộc trước khi đặt lời nhắc chăm cây).

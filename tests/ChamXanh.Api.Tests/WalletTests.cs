@@ -5,6 +5,8 @@ using System.Text.Json;
 using ChamXanh.Api.Common.Auth;
 using ChamXanh.Api.Modules.Listings;
 using ChamXanh.Api.Modules.Wallet;
+using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
 using Microsoft.AspNetCore.Hosting;
 using SkiaSharp;
 
@@ -111,63 +113,96 @@ public class WalletApiTests(MongoFixture mongo) : ApiTestBase(mongo)
         Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
     }
 
+    /// <summary>Gửi đăng một tin Bán; trả về response thô để test kiểm tra mã lỗi phí.</summary>
+    async Task<HttpResponseMessage> Post(HttpClient c, string title, long? acceptFeeXu = null)
+    {
+        var form = new MultipartFormDataContent { { new ByteArrayContent(Jpeg()), "file", "a.jpg" } };
+        var media = (await (await c.PostAsync("/api/media", form)).EnsureOk()).GetProperty("id").GetString()!;
+        return await c.PostAsJsonAsync("/api/listings", new
+        {
+            listing = new
+            {
+                type = "Sell", categoryId = "noi-that", title, description = "Cây khỏe, lá xanh bóng, hợp để văn phòng",
+                price = 200_000, attributes = new { tinhTrang = "Trồng chậu", chieuCao = 50 }, mediaIds = new[] { media },
+            },
+            submit = true, acceptFeeXu,
+        });
+    }
+
+    async Task<JsonElement> Quota(HttpClient c) => await (await c.GetAsync("/api/me/listing-quota")).EnsureOk();
+
     [Fact]
-    public async Task Bump_charges_once_per_idempotency_key_and_moves_listing_to_top()
+    public async Task Free_plan_posts_three_listings_per_month_then_ten_xu_each_with_consent()
     {
         var (seller, _) = await Member();
-        await TopUp(seller);
-        var older = await ActiveListing(seller, title: "Cây kim tiền cũ đăng trước");
-        await ActiveListing(seller, title: "Cây kim tiền mới đăng sau");
+        var q0 = await Quota(seller);
+        Assert.Equal((3, 0, 30), (q0.GetProperty("monthlyQuota").GetInt32(), q0.GetProperty("nextCostXu").GetInt32(), q0.GetProperty("listingDays").GetInt32()));
 
-        var body = new { service = "BUMP", days = (int?)null, expectedPriceBookVersion = 1, expectedPrice = 10, idempotencyKey = "k-1" };
-        (await seller.PostAsJsonAsync($"/api/listings/{older}/promotions", body)).EnsureSuccessStatusCode();
-        (await seller.PostAsJsonAsync($"/api/listings/{older}/promotions", body)).EnsureSuccessStatusCode(); // bấm 2 lần
+        for (var i = 1; i <= 3; i++) (await Post(seller, $"Cây kim tiền miễn phí số {i}")).EnsureSuccessStatusCode();
+        var q3 = await Quota(seller);
+        Assert.Equal((3, 0, 10), (q3.GetProperty("usedThisMonth").GetInt32(), q3.GetProperty("remaining").GetInt32(), q3.GetProperty("nextCostXu").GetInt32()));
+
+        // Tin thứ 4: chưa đồng ý phí thì không trừ Xu và không đăng.
+        var noConsent = await Post(seller, "Cây kim tiền tin thứ tư chưa đồng ý");
+        Assert.Equal(HttpStatusCode.PaymentRequired, noConsent.StatusCode);
+        Assert.Equal("LISTING_FEE_REQUIRED", await noConsent.ErrorCode());
+        // Đồng ý nhưng ví trống.
+        Assert.Equal("INSUFFICIENT_XU", await (await Post(seller, "Cây kim tiền tin thứ tư ví trống", acceptFeeXu: 10)).ErrorCode());
+
+        await TopUp(seller); // 215 Xu
+        var paid = await (await Post(seller, "Cây kim tiền tin thứ tư trả phí", acceptFeeXu: 10)).EnsureOk();
+        Assert.Equal("Active", paid.GetProperty("status").GetString());
         Assert.Equal(205, await Balance(seller));
-
-        var list = await (await Anonymous().GetAsync("/api/listings?q=kim%20tien")).EnsureOk<SearchResult>();
-        Assert.Equal(older, list.Items[0].Id);
+        var detail = await (await Anonymous().GetAsync($"/api/listings/{paid.GetProperty("id").GetString()}")).EnsureOk();
+        var days = (detail.GetProperty("expiresAt").GetDateTime() - detail.GetProperty("firstPublishedAt").GetDateTime()).TotalDays;
+        Assert.InRange(days, 29.9, 30.1); // gói Miễn phí: tin hiển thị 30 ngày
+        Assert.Contains((await (await seller.GetAsync("/api/wallet/ledger")).EnsureOk()).EnumerateArray(),
+            e => e.GetProperty("refType").GetString() == "listingFee" && e.GetProperty("amount").GetInt64() == -10);
     }
 
     [Fact]
-    public async Task Price_change_and_insufficient_balance_and_give_listing_are_rejected()
+    public async Task Plus_plan_gets_thirty_listings_sixty_days_then_five_xu()
     {
         var (seller, _) = await Member();
-        var id = await ActiveListing(seller);
-        var noMoney = await seller.PostAsJsonAsync($"/api/listings/{id}/promotions",
-            new { service = "PRIORITY", days = 7, expectedPriceBookVersion = 1, expectedPrice = 140, idempotencyKey = "a" });
-        Assert.Equal(HttpStatusCode.PaymentRequired, noMoney.StatusCode);
+        var pay = await (await seller.PostAsJsonAsync("/api/plans/checkout", new { plan = "Plus", months = 1 })).EnsureOk();
+        (await seller.PostAsync($"/api/plans/payments/{pay.GetProperty("id").GetString()}/simulate", null)).EnsureSuccessStatusCode();
 
-        await TopUp(seller);
-        var wrongPrice = await seller.PostAsJsonAsync($"/api/listings/{id}/promotions",
-            new { service = "PRIORITY", days = 7, expectedPriceBookVersion = 1, expectedPrice = 100, idempotencyKey = "b" });
-        Assert.Equal("PRICE_CHANGED", await wrongPrice.ErrorCode());
+        var q = await Quota(seller);
+        Assert.Equal(("Plus", 30, 5, 60), (q.GetProperty("plan").GetString(), q.GetProperty("monthlyQuota").GetInt32(),
+            q.GetProperty("extraListingXu").GetInt32(), q.GetProperty("listingDays").GetInt32()));
+        var l = await (await Post(seller, "Cây kim tiền gói Plus hiển thị 60 ngày")).EnsureOk();
+        var detail = await (await Anonymous().GetAsync($"/api/listings/{l.GetProperty("id").GetString()}")).EnsureOk();
+        Assert.InRange((detail.GetProperty("expiresAt").GetDateTime() - detail.GetProperty("firstPublishedAt").GetDateTime()).TotalDays, 59.9, 60.1);
 
-        var give = await ActiveListing(seller, "Give", "Tặng cây kim tiền con tách chậu");
-        var giveRes = await seller.PostAsJsonAsync($"/api/listings/{give}/promotions",
-            new { service = "BUMP", days = (int?)null, expectedPriceBookVersion = 1, expectedPrice = 10, idempotencyKey = "c" });
-        Assert.Equal("NOT_ALLOWED", await giveRes.ErrorCode());
-        Assert.Equal(215, await Balance(seller));
+        // Giả lập đã dùng hết 30 lượt trong tháng: tin tiếp theo 5 Xu.
+        using var scope = Factory.Services.CreateScope();
+        var fees = scope.ServiceProvider.GetRequiredService<ListingFeeService>();
+        var month = ListingFeeService.MonthOf(DateTime.UtcNow);
+        var userId = (await (await seller.GetAsync("/api/me")).EnsureOk()).GetProperty("id").GetString()!;
+        await fees.Charges.InsertManyAsync(Enumerable.Range(0, 29).Select(i => new ListingCharge
+        {
+            Id = $"fake{i}:1", UserId = userId, ListingId = $"fake{i}", Cycle = 1, Month = month, FromQuota = true, At = DateTime.UtcNow,
+        }));
+        Assert.Equal(5, (await Quota(seller)).GetProperty("nextCostXu").GetInt32());
+        await TopUp(seller, "MAM");
+        (await Post(seller, "Cây kim tiền gói Plus vượt hạn mức", acceptFeeXu: 5)).EnsureSuccessStatusCode();
+        Assert.Equal(45, await Balance(seller));
     }
 
     [Fact]
-    public async Task Priority_listing_appears_in_priority_block_and_extends_expiry()
+    public async Task Renewing_expired_listing_uses_a_new_posting_slot()
     {
         var (seller, _) = await Member();
-        await TopUp(seller, "VUON"); // 550 Xu
-        var id = await ActiveListing(seller, title: "Kim tiền ưu tiên hiển thị đầu trang");
-        var promo = await (await seller.PostAsJsonAsync($"/api/listings/{id}/promotions",
-            new { service = "PRIORITY", days = 14, expectedPriceBookVersion = 1, expectedPrice = 240, idempotencyKey = "p" })).EnsureOk();
-        Assert.Equal(240, promo.GetProperty("priceSnapshot").GetProperty("finalPrice").GetInt64());
+        var id = (await (await Post(seller, "Cây kim tiền sẽ hết hạn rồi gia hạn")).EnsureOk()).GetProperty("id").GetString()!;
+        for (var i = 2; i <= 3; i++) (await Post(seller, $"Cây kim tiền dùng hết lượt số {i}")).EnsureSuccessStatusCode();
+        await Factory.Services.GetRequiredService<IMongoDatabase>().GetCollection<Listing>("listings")
+            .UpdateOneAsync(l => l.Id == id, Builders<Listing>.Update.Set(l => l.Status, ListingStatus.Expired));
 
-        var res = await (await Anonymous().GetAsync("/api/listings?categoryId=noi-that")).EnsureOk<SearchResult>();
-        Assert.Contains(res.Priority, p => p.Id == id && p.IsPriority);
-        // tin khác danh mục không được chèn vào khối Ưu tiên (BR-SRC-02)
-        var other = await (await Anonymous().GetAsync("/api/listings?categoryId=sen-da")).EnsureOk<SearchResult>();
-        Assert.DoesNotContain(other.Priority, p => p.Id == id);
-
-        var detail = await (await Anonymous().GetAsync($"/api/listings/{id}")).EnsureOk();
-        Assert.True(detail.GetProperty("expiresAt").GetDateTime() >= detail.GetProperty("priorityUntil").GetDateTime()); // BR-XU-07 (1)
-        Assert.Equal(310, await Balance(seller));
+        Assert.Equal("LISTING_FEE_REQUIRED", await (await seller.PostAsJsonAsync($"/api/listings/{id}/renew", new { })).ErrorCode());
+        await TopUp(seller, "MAM");
+        var renewed = await (await seller.PostAsJsonAsync($"/api/listings/{id}/renew", new { acceptFeeXu = 10 })).EnsureOk();
+        Assert.Equal("Active", renewed.GetProperty("status").GetString());
+        Assert.Equal(40, await Balance(seller));
     }
 
     [Fact]

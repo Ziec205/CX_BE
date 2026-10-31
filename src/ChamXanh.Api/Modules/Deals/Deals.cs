@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using ChamXanh.Api.Common;
 using ChamXanh.Api.Common.Auth;
-using ChamXanh.Api.Modules.Escrow;
 using ChamXanh.Api.Modules.Identity;
 using ChamXanh.Api.Modules.Listings;
 using ChamXanh.Api.Modules.Media;
@@ -55,12 +54,11 @@ public class RentalBooking
 }
 
 public record QuoteRequest(long UnitPrice, int Quantity, string? Note, List<string>? MediaIds, DateTime? AvailableFrom);
-public record QuoteOrderRequest(DeliveryMethod Delivery, long? ShippingFee, string? DeliveryAddress, DateTime? PickupDate, int? ShipWithinDays);
 public record RentalRequest(DateTime StartDate, DateTime EndDate, int? Quantity, string? Note, string? DeliveryAddress);
 public record RentalResponse(bool Accept, string? Note);
 
 public class DealsService(IMongoDatabase db, TimeProvider clock, ListingService listings, UserService users, MediaService media,
-    NotificationService notifications, EscrowService escrow)
+    NotificationService notifications)
 {
     public IMongoCollection<Quote> Quotes { get; } = db.GetCollection<Quote>("quotes");
     public IMongoCollection<RentalBooking> Rentals { get; } = db.GetCollection<RentalBooking>("rentalBookings");
@@ -111,17 +109,8 @@ public class DealsService(IMongoDatabase db, TimeProvider clock, ListingService 
         var res = await Quotes.UpdateOneAsync(x => x.Id == quoteId && x.Status == QuoteStatus.Sent,
             Builders<Quote>.Update.Set(x => x.Status, QuoteStatus.Selected).Set(x => x.UpdatedAt, Now), cancellationToken: ct);
         if (res.ModifiedCount == 0) throw DomainException.Conflict("INVALID_STATE", "Báo giá không còn hiệu lực");
-        await notifications.SendAsync(q.SellerId, "listing.quote_selected", "Báo giá của bạn đã được chọn", "Người mua sẽ liên hệ hoặc tạo đơn đảm bảo", $"/tin/{q.ListingId}", ct);
+        await notifications.SendAsync(q.SellerId, "listing.quote_selected", "Báo giá của bạn đã được chọn", "Người mua sẽ nhắn tin để chốt giao hàng", $"/tin/{q.ListingId}", ct);
         return (await Quotes.Find(x => x.Id == quoteId).FirstAsync(ct));
-    }
-
-    public async Task<EscrowOrder> OrderFromQuoteAsync(string buyerId, string quoteId, QuoteOrderRequest req, CancellationToken ct)
-    {
-        var q = await Quotes.Find(x => x.Id == quoteId && x.BuyerId == buyerId).FirstOrDefaultAsync(ct) ?? throw DomainException.NotFound("báo giá");
-        if (q.Status != QuoteStatus.Selected) throw DomainException.Conflict("QUOTE_NOT_SELECTED", "Hãy chọn báo giá trước khi tạo đơn");
-        var l = await listings.GetAsync(q.ListingId, ct);
-        return await escrow.CreateFromQuoteAsync(l, q.SellerId, q.Id, q.UnitPrice, q.Quantity, req.Delivery, req.ShippingFee, req.DeliveryAddress,
-            req.PickupDate, req.ShipWithinDays, ct);
     }
 
     // ---------- Thuê cây có lịch ----------
@@ -232,7 +221,6 @@ public static class DealsEndpoints
                 Builders<Quote>.Update.Set(q => q.Status, QuoteStatus.Withdrawn), cancellationToken: ct);
             return Results.NoContent();
         });
-        g.MapPost("/quotes/{id}/order", (string id, QuoteOrderRequest req, ClaimsPrincipal p, DealsService svc, CancellationToken ct) => svc.OrderFromQuoteAsync(p.UserId(), id, req, ct));
 
         // Lịch thuê công khai: các khoảng ngày đã kín (không lộ người thuê).
         app.MapGet("/api/listings/{id}/rental-calendar", async (string id, DateTime? from, DateTime? to, DealsService svc, ListingService listings, TimeProvider clock, CancellationToken ct) =>

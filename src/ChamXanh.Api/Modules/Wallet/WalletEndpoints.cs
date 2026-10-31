@@ -43,14 +43,6 @@ public static class WalletEndpoints
             return await svc.TopUps.Find(t => t.Id == id && t.UserId == userId).FirstOrDefaultAsync(ct) is { } t ? Results.Ok(t) : Results.NotFound();
         });
 
-        app.MapPost("/api/listings/{id}/promotions", async (string id, BuyPromotionRequest req, ClaimsPrincipal p, PromotionService svc, CancellationToken ct) =>
-            Results.Ok(await svc.BuyAsync(id, p.UserId(), req, ct))).WithTags("Wallet").RequireAuthorization(Policies.Member);
-        app.MapGet("/api/listings/{id}/promotions", async (string id, ClaimsPrincipal p, PromotionService svc, Listings.ListingService listings, CancellationToken ct) =>
-        {
-            await listings.GetOwnedAsync(id, p.UserId(), ct);
-            return await svc.ForListingAsync(id, ct);
-        }).WithTags("Wallet").RequireAuthorization(Policies.Member);
-
         // Webhook cổng thanh toán (không cần đăng nhập, xác thực bằng chữ ký HMAC trên nội dung thô).
         app.MapPost("/api/payments/webhook", async (HttpRequest request, TopUpService svc, CancellationToken ct) =>
         {
@@ -118,21 +110,18 @@ public class WalletWorker(IServiceScopeFactory scopes, ILogger<WalletWorker> log
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
-        var tick = 0;
+        using var timer = new PeriodicTimer(TimeSpan.FromHours(1));
         do
         {
             try
             {
                 using var scope = scopes.CreateScope();
-                await scope.ServiceProvider.GetRequiredService<PromotionService>().RunAutoBumpsAsync(stoppingToken);
-                if (tick++ % 60 == 0)
-                    await scope.ServiceProvider.GetRequiredService<WalletService>().ExpireLotsAsync(
-                        scope.ServiceProvider.GetRequiredService<IMongoClient>(), stoppingToken);
+                await scope.ServiceProvider.GetRequiredService<WalletService>().ExpireLotsAsync(
+                    scope.ServiceProvider.GetRequiredService<IMongoClient>(), stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "Lỗi job ví / đẩy tự động");
+                logger.LogError(ex, "Lỗi job hết hạn Xu thưởng");
             }
         } while (await timer.WaitForNextTickAsync(stoppingToken));
     }

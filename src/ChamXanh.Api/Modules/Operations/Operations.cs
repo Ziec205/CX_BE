@@ -4,8 +4,6 @@ using System.Text;
 using ChamXanh.Api.Common;
 using ChamXanh.Api.Common.Auth;
 using ChamXanh.Api.Modules.Community;
-using ChamXanh.Api.Modules.Escrow;
-using ChamXanh.Api.Modules.Gardens;
 using ChamXanh.Api.Modules.Identity;
 using ChamXanh.Api.Modules.Listings;
 using ChamXanh.Api.Modules.Media;
@@ -42,7 +40,7 @@ public class SupportTicket
     public string? OrderId { get; set; }
     public string? ConversationId { get; set; }
     [BsonRepresentation(BsonType.String)] public TicketStatus Status { get; set; }
-    /// <summary>SLA: ticket thường 24h, ticket gắn đơn đảm bảo 4h.</summary>
+    /// <summary>SLA: ticket thường 24h, ticket khẩn 4h.</summary>
     public DateTime DueAt { get; set; }
     public string? AssigneeId { get; set; }
     public List<TicketMessage> Messages { get; set; } = [];
@@ -221,8 +219,8 @@ public static class OperationsEndpoints
     {
         var admin = app.MapGroup("/api/admin/reports").WithTags("Admin Reports").RequireAuthorization(Policies.ForPerm(Perm.ReportsView));
 
-        admin.MapGet("/dashboard", async (IMongoDatabase db, ListingService listings, UserService users, ModerationService mod, EscrowService escrow,
-            CommunityService community, TimeProvider clock, CancellationToken ct) =>
+        admin.MapGet("/dashboard", async (IMongoDatabase db, ListingService listings, UserService users, ModerationService mod,
+            CommunityService community, Plans.PlanService plans, ListingFeeService fees, TimeProvider clock, CancellationToken ct) =>
         {
             var now = clock.GetUtcNow().UtcDateTime;
             var day = now.AddDays(-1);
@@ -232,8 +230,11 @@ public static class OperationsEndpoints
             var paidTopUps = await topUps.Aggregate().Match(new BsonDocument { { "status", "Paid" }, { "paidAt", new BsonDocument("$gte", week) } })
                 .Group(new BsonDocument { { "_id", BsonNull.Value }, { "vnd", new BsonDocument("$sum", "$snapshot.priceVnd") }, { "count", new BsonDocument("$sum", 1) } })
                 .FirstOrDefaultAsync(ct);
-            var gmv = await escrow.Orders.Aggregate().Match(o => o.PaidAt >= week && o.Status != OrderStatus.Cancelled)
-                .Group(o => 1, g => new { total = g.Sum(o => o.Total), count = g.Count() }).FirstOrDefaultAsync(ct);
+            var planRevenue = await plans.Payments.Aggregate().Match(x => x.Status == Plans.PlanPaymentStatus.Paid && x.PaidAt >= week)
+                .Group(x => 1, g => new { vnd = g.Sum(x => x.AmountVnd), count = g.Count() }).FirstOrDefaultAsync(ct);
+            var feeXu = await fees.Charges.Aggregate().Match(c => c.At >= week && !c.FromQuota)
+                .Group(c => 1, g => new { xu = g.Sum(c => c.Xu), count = g.Count() }).FirstOrDefaultAsync(ct);
+            var activeSubs = await plans.Subscriptions.Find(s => s.EndAt > now).Project(s => s.Plan).ToListAsync(ct);
             var casesOpen = await db.GetCollection<BsonDocument>("moderationCases").CountDocumentsAsync(new BsonDocument("status", "Open"), cancellationToken: ct);
             return new
             {
@@ -249,12 +250,15 @@ public static class OperationsEndpoints
                     total = await users.Users.CountDocumentsAsync(u => u.Status != UserStatus.Deleted, cancellationToken: ct),
                     newToday = await users.Users.CountDocumentsAsync(u => u.CreatedAt >= day, cancellationToken: ct),
                     newWeek = await users.Users.CountDocumentsAsync(u => u.CreatedAt >= week, cancellationToken: ct),
-                    verifiedGardens = await users.Users.CountDocumentsAsync(u => u.Flags.HasVerifiedGarden, cancellationToken: ct),
+                    plus = activeSubs.Count(p => p == Plans.PlanCode.Plus),
+                    pro = activeSubs.Count(p => p == Plans.PlanCode.Pro),
                 },
-                revenue7d = new { topUpVnd = paidTopUps?["vnd"].ToInt64() ?? 0, topUpCount = paidTopUps?["count"].ToInt32() ?? 0 },
-                escrow7d = new { gmv = gmv?.total ?? 0, orders = gmv?.count ?? 0 },
-                disputesOpen = await escrow.Orders.CountDocumentsAsync(o => o.Status == OrderStatus.Disputed, cancellationToken: ct),
-                payoutsPending = await escrow.Orders.CountDocumentsAsync(o => (o.Status == OrderStatus.Completed || o.Status == OrderStatus.PartiallyRefunded) && o.PayoutEligibleAt <= now, cancellationToken: ct),
+                revenue7d = new
+                {
+                    planVnd = planRevenue?.vnd ?? 0, planPayments = planRevenue?.count ?? 0,
+                    topUpVnd = paidTopUps?["vnd"].ToInt64() ?? 0, topUpCount = paidTopUps?["count"].ToInt32() ?? 0,
+                    listingFeeXu = feeXu?.xu ?? 0, paidListings = feeXu?.count ?? 0,
+                },
                 ticketsOverdue = await db.GetCollection<SupportTicket>("supportTickets").CountDocumentsAsync(t => t.Status == TicketStatus.Open && t.DueAt < now, cancellationToken: ct),
                 communityPostsWeek = await community.Posts.CountDocumentsAsync(p => p.CreatedAt >= week, cancellationToken: ct),
             };
@@ -275,8 +279,8 @@ public static class OperationsEndpoints
             }).OrderByDescending(x => x.listings);
         });
 
-        // Xuất CSV (UC-ADM-14): đơn đảm bảo, nạp Xu, người bán — phục vụ báo cáo Bộ Công Thương và đối soát.
-        admin.MapGet("/export/{kind}", async (string kind, DateTime? from, DateTime? to, IMongoDatabase db, EscrowService escrow, ClaimsPrincipal p,
+        // Xuất CSV (UC-ADM-14): thanh toán gói, nạp Xu, phí đăng tin — phục vụ đối soát doanh thu.
+        admin.MapGet("/export/{kind}", async (string kind, DateTime? from, DateTime? to, IMongoDatabase db, Plans.PlanService plans, ListingFeeService fees, ClaimsPrincipal p,
             AuditService audit, TimeProvider clock, CancellationToken ct) =>
         {
             var end = to ?? clock.GetUtcNow().UtcDateTime;
@@ -285,22 +289,20 @@ public static class OperationsEndpoints
             static string Csv(object? v) => v is null ? "" : "\"" + Convert.ToString(v, CultureInfo.InvariantCulture)!.Replace("\"", "\"\"") + "\"";
             switch (kind)
             {
-                case "escrow-orders":
-                    sb.AppendLine("code,status,buyerId,sellerId,itemAmount,shippingFee,fee,total,refund,payout,createdAt,paidAt,completedAt,settledAt");
-                    foreach (var o in await escrow.Orders.Find(o => o.CreatedAt >= start && o.CreatedAt < end).SortBy(o => o.CreatedAt).ToListAsync(ct))
-                        sb.AppendLine(string.Join(',', new object?[] { o.Code, o.Status, o.BuyerId, o.SellerId, o.ItemAmount, o.ShippingFee, o.Fee, o.Total, o.RefundAmount, o.PayoutAmount, o.CreatedAt.ToString("o"), o.PaidAt?.ToString("o"), o.CompletedAt?.ToString("o"), o.SettledAt?.ToString("o") }.Select(Csv)));
+                case "plan-payments":
+                    sb.AppendLine("orderCode,userId,plan,months,amountVnd,status,gatewayRef,createdAt,paidAt");
+                    foreach (var x in await plans.Payments.Find(x => x.CreatedAt >= start && x.CreatedAt < end).SortBy(x => x.CreatedAt).ToListAsync(ct))
+                        sb.AppendLine(string.Join(',', new object?[] { x.OrderCode, x.UserId, x.Plan, x.Months, x.AmountVnd, x.Status, x.GatewayRef, x.CreatedAt.ToString("o"), x.PaidAt?.ToString("o") }.Select(Csv)));
                     break;
                 case "topups":
                     sb.AppendLine("id,userId,status,priceVnd,xu,gatewayRef,createdAt,paidAt");
                     foreach (var t in await db.GetCollection<BsonDocument>("topUps").Find(new BsonDocument("createdAt", new BsonDocument { { "$gte", start }, { "$lt", end } })).ToListAsync(ct))
                         sb.AppendLine(string.Join(',', new object?[] { t["_id"], t.GetValue("userId", ""), t.GetValue("status", ""), t["snapshot"].AsBsonDocument.GetValue("priceVnd", 0), t["snapshot"].AsBsonDocument.GetValue("xu", 0), t.GetValue("gatewayRef", BsonNull.Value), t.GetValue("createdAt", BsonNull.Value), t.GetValue("paidAt", BsonNull.Value) }.Select(v => Csv(v is BsonNull ? null : v))));
                     break;
-                case "sellers":
-                    // Doanh thu người bán qua Giao dịch đảm bảo (phục vụ khấu trừ thuế, L6).
-                    sb.AppendLine("sellerId,orders,gross,fees,payout");
-                    var settled = await escrow.Orders.Find(o => o.SettledAt >= start && o.SettledAt < end).ToListAsync(ct);
-                    foreach (var g in settled.GroupBy(o => o.SellerId))
-                        sb.AppendLine(string.Join(',', new object?[] { g.Key, g.Count(), g.Sum(o => o.ItemAmount + o.ShippingFee - o.RefundAmount), g.Sum(o => o.ItemAmount + o.ShippingFee - o.RefundAmount - (o.PayoutAmount ?? 0)), g.Sum(o => o.PayoutAmount ?? 0) }.Select(Csv)));
+                case "listing-fees":
+                    sb.AppendLine("listingId,userId,cycle,month,plan,fromQuota,xu,at");
+                    foreach (var c in await fees.Charges.Find(c => c.At >= start && c.At < end).SortBy(c => c.At).ToListAsync(ct))
+                        sb.AppendLine(string.Join(',', new object?[] { c.ListingId, c.UserId, c.Cycle, c.Month, c.Plan, c.FromQuota, c.Xu, c.At.ToString("o") }.Select(Csv)));
                     break;
                 default: throw DomainException.NotFound("loại báo cáo");
             }

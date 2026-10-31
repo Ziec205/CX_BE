@@ -5,7 +5,6 @@ using ChamXanh.Api.Infrastructure;
 using ChamXanh.Api.Modules.Admin;
 using ChamXanh.Api.Modules.Catalog;
 using ChamXanh.Api.Modules.Discovery;
-using ChamXanh.Api.Modules.Gardens;
 using ChamXanh.Api.Modules.Messaging;
 using ChamXanh.Api.Modules.Reviews;
 using ChamXanh.Api.Modules.Identity;
@@ -17,7 +16,6 @@ using ChamXanh.Api.Modules.Wallet;
 using ChamXanh.Api.Modules.Notifications;
 using ChamXanh.Api.Modules.PlantCare;
 using ChamXanh.Api.Modules.Explore;
-using ChamXanh.Api.Modules.Escrow;
 using ChamXanh.Api.Modules.Platform;
 using ChamXanh.Api.Modules.Community;
 using ChamXanh.Api.Modules.Ai;
@@ -121,6 +119,7 @@ services.AddStartupTask((sp, _) => sp.GetRequiredService<MediaService>().EnsureI
 services.AddSingleton(config.GetSection("Listings").Get<ListingOptions>() ?? new ListingOptions());
 services.AddScoped<ModerationService>();
 services.AddScoped<ListingService>();
+services.AddScoped<ListingFeeService>();
 services.AddScoped<ListingSearch>();
 services.AddScoped<ISpeciesLegalFlagChanged, ListingSpeciesFlagHandler>();
 services.AddHostedService<ListingMaintenanceWorker>();
@@ -128,6 +127,7 @@ services.AddStartupTask(async (sp, _) =>
 {
     await sp.GetRequiredService<ModerationService>().EnsureIndexesAsync();
     await sp.GetRequiredService<ListingService>().EnsureIndexesAsync();
+    await sp.GetRequiredService<ListingFeeService>().EnsureIndexesAsync();
     var phoneViews = sp.GetRequiredService<IMongoDatabase>().GetCollection<PhoneView>("phoneViews");
     await phoneViews.Indexes.CreateManyAsync(
     [
@@ -139,13 +139,11 @@ services.AddStartupTask(async (sp, _) =>
 services.AddSingleton(config.GetSection("Payments").Get<PaymentOptions>() ?? new PaymentOptions());
 services.AddScoped<WalletService>();
 services.AddScoped<TopUpService>();
-services.AddScoped<PromotionService>();
 services.AddHostedService<WalletWorker>();
 services.AddStartupTask(async (sp, _) =>
 {
     await sp.GetRequiredService<WalletService>().EnsureIndexesAsync();
     await sp.GetRequiredService<TopUpService>().EnsureIndexesAsync();
-    await sp.GetRequiredService<PromotionService>().EnsureIndexesAsync();
 });
 
 // Enum dạng chữ giống REST, để client xử lý tin nhắn realtime và tin nhắn tải qua API như nhau.
@@ -154,9 +152,6 @@ services.AddScoped<ChatService>();
 services.AddStartupTask((sp, _) => sp.GetRequiredService<ChatService>().EnsureIndexesAsync());
 
 services.AddSingleton(new DataProtector(config.GetSection("Security").Get<SecurityOptions>() ?? new SecurityOptions()));
-services.AddScoped<GardenService>();
-services.AddHostedService<GardenPlanWorker>();
-services.AddStartupTask((sp, _) => sp.GetRequiredService<GardenService>().EnsureIndexesAsync());
 
 services.AddScoped<ReviewService>();
 services.AddStartupTask(async (sp, _) =>
@@ -175,18 +170,10 @@ services.AddStartupTask(async (sp, ct) =>
 });
 
 services.AddScoped<FeatureFlagService>();
-services.AddSingleton(config.GetSection("Escrow").Get<EscrowOptions>() ?? new EscrowOptions());
-services.AddSingleton<IEscrowGateway, SandboxEscrowGateway>();
-services.AddScoped<EscrowService>();
-services.AddHostedService<EscrowWorker>();
-services.AddStartupTask((sp, _) => sp.GetRequiredService<EscrowService>().EnsureIndexesAsync());
 services.AddSingleton<LogPushSender>();
 services.AddSingleton<IPushSender>(sp => sp.GetRequiredService<LogPushSender>());
 services.AddSingleton<ISmsSender>(sp => sp.GetRequiredService<LogPushSender>());
 services.AddScoped<DealsService>();
-services.AddSingleton(config.GetSection("Kyc").Get<KycOptions>() ?? new KycOptions());
-services.AddSingleton<IKycVerifier, ManualKycVerifier>();
-services.AddScoped<KycCheckService>();
 services.AddStartupTask(async (sp, _) =>
 {
     await sp.GetRequiredService<DealsService>().EnsureIndexesAsync();
@@ -280,7 +267,6 @@ app.MapListings();
 app.MapModeration();
 app.MapWallet();
 app.MapChat();
-app.MapGardens();
 app.MapReviews();
 app.MapDiscovery();
 app.MapPricing();
@@ -288,7 +274,6 @@ app.MapNotifications();
 app.MapPlantCare();
 app.MapExplore();
 app.MapFeatureFlags();
-app.MapEscrow();
 app.MapCommunity();
 app.MapAi();
 app.MapAssistant();

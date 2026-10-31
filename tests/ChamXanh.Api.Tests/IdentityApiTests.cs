@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using ChamXanh.Api.Common.Auth;
 using ChamXanh.Api.Modules.Identity;
 using Microsoft.AspNetCore.Hosting;
@@ -24,65 +25,72 @@ public class PhoneNumberTests
 [Collection(ApiCollection.Name)]
 public class IdentityApiTests(MongoFixture mongo) : ApiTestBase(mongo)
 {
-    [Fact]
-    public async Task Otp_login_creates_user_once_and_profile_can_be_updated()
+    async Task<JsonElement> Register(string username, string ip, string password = "mat-khau-dai-1")
     {
         var anon = Anonymous();
-        var first = await (await anon.PostAsJsonAsync("/api/auth/otp/request", new { phone = "0901234567" })).EnsureOk();
-        var verify = await (await anon.PostAsJsonAsync("/api/auth/otp/verify",
-            new { phone = "+84901234567", code = first.GetProperty("devCode").GetString() })).EnsureOk();
-        Assert.True(verify.GetProperty("isNew").GetBoolean());
-        Assert.False(verify.GetProperty("user").GetProperty("canPost").GetBoolean());
+        anon.DefaultRequestHeaders.Add("X-Forwarded-For", ip);
+        return await (await anon.PostAsJsonAsync("/api/auth/register", new { username, password, confirmPassword = password })).EnsureOk();
+    }
 
-        var again = await (await anon.PostAsJsonAsync("/api/auth/otp/request", new { phone = "0901234567" })).EnsureOk();
-        var second = await (await anon.PostAsJsonAsync("/api/auth/otp/verify",
-            new { phone = "0901234567", code = again.GetProperty("devCode").GetString() })).EnsureOk();
-        Assert.False(second.GetProperty("isNew").GetBoolean());
-        Assert.Equal(verify.GetProperty("user").GetProperty("id").GetString(), second.GetProperty("user").GetProperty("id").GetString());
+    [Fact]
+    public async Task Register_then_login_with_password_and_profile_can_be_updated()
+    {
+        var reg = await Register("lan.caycanh", "10.9.0.1");
+        Assert.True(reg.GetProperty("isNew").GetBoolean());
+        Assert.False(reg.GetProperty("user").GetProperty("canPost").GetBoolean());
 
-        var client = WithToken(second.GetProperty("tokens").GetProperty("accessToken").GetString()!);
+        var login = await (await Anonymous().PostAsJsonAsync("/api/auth/login", new { username = "LAN.CayCanh", password = "mat-khau-dai-1" })).EnsureOk();
+        Assert.False(login.GetProperty("isNew").GetBoolean());
+        Assert.Equal(reg.GetProperty("user").GetProperty("id").GetString(), login.GetProperty("user").GetProperty("id").GetString());
+
+        var client = WithToken(login.GetProperty("tokens").GetProperty("accessToken").GetString()!);
         var me = await (await client.PutAsJsonAsync("/api/me", new { fullName = "Trần Thị Lan", provinceId = "79", displayName = "Lan Cây Cảnh" })).EnsureOk();
         Assert.True(me.GetProperty("canPost").GetBoolean());
         Assert.Equal("Lan Cây Cảnh", me.GetProperty("displayName").GetString());
     }
 
     [Fact]
-    public async Task Wrong_code_rejected_and_code_is_single_use()
+    public async Task Phone_login_endpoints_are_gone_only_user_and_admin_sign_in()
     {
-        var anon = Anonymous();
-        var req = await (await anon.PostAsJsonAsync("/api/auth/otp/request", new { phone = "0931111111" })).EnsureOk();
-        var code = req.GetProperty("devCode").GetString();
-        var wrong = await anon.PostAsJsonAsync("/api/auth/otp/verify", new { phone = "0931111111", code = code == "000000" ? "111111" : "000000" });
-        Assert.Equal("OTP_INVALID", await wrong.ErrorCode());
-        (await anon.PostAsJsonAsync("/api/auth/otp/verify", new { phone = "0931111111", code })).EnsureSuccessStatusCode();
-        var reuse = await anon.PostAsJsonAsync("/api/auth/otp/verify", new { phone = "0931111111", code });
-        Assert.Equal("OTP_EXPIRED", await reuse.ErrorCode());
+        Assert.Equal(HttpStatusCode.NotFound, (await Anonymous().PostAsJsonAsync("/api/auth/otp/request", new { phone = "0901234567" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await Anonymous().PostAsJsonAsync("/api/auth/otp/verify", new { phone = "0901234567", code = "000000" })).StatusCode);
     }
 
     [Fact]
-    public async Task Otp_rate_limited_per_phone()
+    public async Task Five_wrong_passwords_lock_login_for_fifteen_minutes()
     {
-        var anon = Anonymous();
-        for (var i = 0; i < 5; i++) (await anon.PostAsJsonAsync("/api/auth/otp/request", new { phone = "0942222222" })).EnsureSuccessStatusCode();
-        var sixth = await anon.PostAsJsonAsync("/api/auth/otp/request", new { phone = "0942222222" });
-        Assert.Equal(HttpStatusCode.TooManyRequests, sixth.StatusCode);
+        await Register("khoa.sai.mk", "10.9.0.2");
+        for (var i = 0; i < 5; i++)
+            Assert.Equal(HttpStatusCode.Unauthorized, (await Anonymous().PostAsJsonAsync("/api/auth/login", new { username = "khoa.sai.mk", password = "sai-roi" })).StatusCode);
+        var right = await Anonymous().PostAsJsonAsync("/api/auth/login", new { username = "khoa.sai.mk", password = "mat-khau-dai-1" });
+        Assert.Equal(HttpStatusCode.TooManyRequests, right.StatusCode);
     }
 
     [Fact]
-    public async Task Invalid_phone_is_bad_request()
+    public async Task Phone_verification_wrong_code_single_use_and_rate_limit()
     {
-        var res = await Anonymous().PostAsJsonAsync("/api/auth/otp/request", new { phone = "12345" });
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var reg = await Register("xac.minh.sdt", "10.9.0.3");
+        var c = WithToken(reg.GetProperty("tokens").GetProperty("accessToken").GetString()!);
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.PostAsJsonAsync("/api/me/phone/request", new { phone = "12345" })).StatusCode);
+
+        var code = (await (await c.PostAsJsonAsync("/api/me/phone/request", new { phone = "0931111111" })).EnsureOk()).GetProperty("devCode").GetString();
+        Assert.Equal("OTP_INVALID", await (await c.PostAsJsonAsync("/api/me/phone/verify", new { phone = "0931111111", code = code == "000000" ? "111111" : "000000" })).ErrorCode());
+        var me = await (await c.PostAsJsonAsync("/api/me/phone/verify", new { phone = "0931111111", code })).EnsureOk();
+        Assert.Equal("+84931111111", me.GetProperty("phone").GetString());
+        Assert.Equal("OTP_EXPIRED", await (await c.PostAsJsonAsync("/api/me/phone/verify", new { phone = "0931111111", code })).ErrorCode());
+
+        // Tối đa 5 mã mỗi giờ cho một số điện thoại.
+        for (var i = 0; i < 4; i++) (await c.PostAsJsonAsync("/api/me/phone/request", new { phone = "0942222222" })).EnsureSuccessStatusCode();
+        (await c.PostAsJsonAsync("/api/me/phone/request", new { phone = "0942222222" })).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await c.PostAsJsonAsync("/api/me/phone/request", new { phone = "0942222222" })).StatusCode);
     }
 
     [Fact]
     public async Task Refresh_token_rotates_and_cannot_be_reused()
     {
-        var anon = Anonymous();
-        var req = await (await anon.PostAsJsonAsync("/api/auth/otp/request", new { phone = "0953333333" })).EnsureOk();
-        var auth = await (await anon.PostAsJsonAsync("/api/auth/otp/verify", new { phone = "0953333333", code = req.GetProperty("devCode").GetString() })).EnsureOk();
+        var auth = await Register("xoay.token", "10.9.0.4");
         var refresh = auth.GetProperty("tokens").GetProperty("refreshToken").GetString();
-
+        var anon = Anonymous();
         var rotated = await (await anon.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = refresh })).EnsureOk();
         Assert.NotEqual(refresh, rotated.GetProperty("refreshToken").GetString());
         var reused = await anon.PostAsJsonAsync("/api/auth/refresh", new { refreshToken = refresh });

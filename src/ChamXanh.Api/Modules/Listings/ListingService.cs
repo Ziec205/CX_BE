@@ -18,12 +18,12 @@ public record ListingInput(
     long? BudgetMin = null, long? BudgetMax = null, DateTime? NeededBy = null, RentTerms? Rent = null, string? WantInExchange = null,
     int Quantity = 1, string? Unit = null, Dictionary<string, JsonElement>? Attributes = null,
     string? ProvinceId = null, string? WardId = null, double? Lat = null, double? Lng = null,
-    List<string>? PickupOptions = null, bool EscrowEnabled = false, List<string>? MediaIds = null, string? VerificationMediaId = null,
+    List<string>? PickupOptions = null, List<string>? MediaIds = null, string? VerificationMediaId = null,
     List<string>? CollectionIds = null, List<string>? Uses = null);
 
 public class ListingService(
     IMongoDatabase db, TimeProvider clock, ListingOptions options, UserService users, CatalogService catalog,
-    MediaService media, ModerationService moderation)
+    MediaService media, ModerationService moderation, ListingFeeService fees)
 {
     public IMongoCollection<Listing> Listings { get; } = db.GetCollection<Listing>("listings");
     static readonly string[] PickupValues = ["PICKUP", "SELLER_DELIVERY", "SELF_ARRANGED_CARRIER"];
@@ -35,7 +35,6 @@ public class ListingService(
         [
             new CreateIndexModel<Listing>(k.Ascending(l => l.Status).Ascending(l => l.CategoryId).Descending(l => l.BumpedAt)),
             new CreateIndexModel<Listing>(k.Ascending(l => l.Status).Descending(l => l.BumpedAt)),
-            new CreateIndexModel<Listing>(k.Ascending(l => l.Status).Ascending(l => l.PriorityUntil)),
             new CreateIndexModel<Listing>(k.Ascending(l => l.SellerId).Ascending(l => l.Status)),
             new CreateIndexModel<Listing>(k.Ascending(l => l.Status).Ascending(l => l.ExpiresAt)),
             new CreateIndexModel<Listing>(k.Ascending(l => l.SpeciesId).Ascending(l => l.Status)),
@@ -59,29 +58,25 @@ public class ListingService(
 
     // ------------------------------------------------------------------ tạo, gửi duyệt
 
-    public async Task<Listing> CreateAsync(string userId, ListingInput input, bool submit, CancellationToken ct, string? proxyActor = null)
+    public async Task<Listing> CreateAsync(string userId, ListingInput input, bool submit, CancellationToken ct, long? acceptFeeXu = null)
     {
         var user = await users.RequireActiveAsync(userId, ct);
         users.EnsureCanPost(user);
         var now = Now;
 
-        // BR-LST-01: giới hạn tốc độ (công cụ đăng hộ của Admin không bị giới hạn — BR-LST-14).
-        if (proxyActor is null)
-        {
-            var limit = user.Flags.HasActivePlan ? options.MaxNewPerHourGarden : options.MaxNewPerHour;
-            var lastHour = await Listings.CountDocumentsAsync(l => l.SellerId == userId && l.CreatedAt > now.AddHours(-1), cancellationToken: ct);
-            if (lastHour >= limit) throw DomainException.TooMany($"Bạn chỉ được đăng tối đa {limit} tin mỗi giờ");
-        }
+        // BR-LST-01: giới hạn tốc độ chống spam.
+        var lastHour = await Listings.CountDocumentsAsync(l => l.SellerId == userId && l.CreatedAt > now.AddHours(-1), cancellationToken: ct);
+        if (lastHour >= options.MaxNewPerHour) throw DomainException.TooMany($"Bạn chỉ được đăng tối đa {options.MaxNewPerHour} tin mỗi giờ");
 
         var listing = new Listing { SellerId = userId, CreatedAt = now };
         await ApplyInputAsync(listing, input, user, ct);
         listing.UpdatedAt = now;
         await Listings.InsertOneAsync(listing, cancellationToken: ct);
         await media.AttachAsync(listing.Media.Select(m => m.MediaId).Append(listing.VerificationMediaId).OfType<string>(), listing.Id, ct);
-        return submit ? await SubmitAsync(listing.Id, userId, ct) : listing;
+        return submit ? await SubmitAsync(listing.Id, userId, ct, acceptFeeXu) : listing;
     }
 
-    public async Task<Listing> SubmitAsync(string id, string userId, CancellationToken ct)
+    public async Task<Listing> SubmitAsync(string id, string userId, CancellationToken ct, long? acceptFeeXu = null)
     {
         var listing = await GetOwnedAsync(id, userId, ct);
         if (listing.Status is not (ListingStatus.Draft or ListingStatus.Rejected))
@@ -94,6 +89,16 @@ public class ListingService(
         await EnsureNotDuplicateAsync(listing, listing.Media, ct);
 
         var risk = await EvaluateRiskAsync(listing, listing.Title, listing.Description, category, listing.SpeciesId, listing.Attributes, listing.Media, user, ct);
+
+        // Lần gửi đăng đầu tiên tính một lượt: còn hạn mức tháng thì miễn phí, hết thì trừ Xu.
+        // Tin bị hệ thống từ chối ngay (hàng cấm) không tính lượt; tin bị từ chối rồi sửa gửi lại không tính thêm.
+        if (risk.Route != RiskRoute.AutoReject && listing.ChargedCycles == 0)
+        {
+            var charge = await fees.ChargeAsync(userId, listing.Id, 1, acceptFeeXu, ct);
+            await SetFieldsAsync(listing.Id, Builders<Listing>.Update.Set(l => l.ChargedCycles, 1).Set(l => l.ListingDays, charge.ListingDays), ct);
+            listing.ChargedCycles = 1;
+            listing.ListingDays = charge.ListingDays;
+        }
         return await RouteAsync(listing, risk, CaseTrigger.New, ct);
     }
 
@@ -129,9 +134,8 @@ public class ListingService(
         var now = Now;
         var u = Builders<Listing>.Update.Set(l => l.Status, ListingStatus.Active).Set(l => l.RejectReason, null).Set(l => l.UpdatedAt, now);
         if (listing.FirstPublishedAt is null)
-            u = u.Set(l => l.FirstPublishedAt, now).Set(l => l.BumpedAt, now).Set(l => l.ExpiresAt, ListingRules.ComputeExpiry(now, options));
+            u = u.Set(l => l.FirstPublishedAt, now).Set(l => l.BumpedAt, now).Set(l => l.ExpiresAt, ListingRules.ComputeExpiry(now, options, DaysOf(listing)));
         await SetFieldsAsync(listing.Id, u, ct);
-        await RecomputeProSellerAsync(listing.SellerId, ct);
     }
 
     // ------------------------------------------------------------------ sửa tin
@@ -172,7 +176,7 @@ public class ListingService(
             .Set(l => l.Description, draft.Description).Set(l => l.Quantity, Math.Max(draft.Quantity, current.Reserved + current.Sold))
             .Set(l => l.Unit, draft.Unit).Set(l => l.Attributes, draft.Attributes).Set(l => l.Uses, draft.Uses).Set(l => l.PickupOptions, draft.PickupOptions)
             .Set(l => l.Location, draft.Location).Set(l => l.WardId, draft.WardId).Set(l => l.ProvinceId, draft.ProvinceId)
-            .Set(l => l.EscrowEnabled, draft.EscrowEnabled).Set(l => l.PriceNegotiable, draft.PriceNegotiable)
+            .Set(l => l.PriceNegotiable, draft.PriceNegotiable)
             .Set(l => l.Rent, draft.Rent).Set(l => l.BudgetMin, draft.BudgetMin).Set(l => l.BudgetMax, draft.BudgetMax)
             .Set(l => l.NeededBy, draft.NeededBy).Set(l => l.WantInExchange, draft.WantInExchange).Set(l => l.CollectionIds, draft.CollectionIds)
             .Set(l => l.PriceMode, draft.PriceMode).Set(l => l.PriceRefMin, draft.PriceRefMin).Set(l => l.PriceRefMax, draft.PriceRefMax)
@@ -244,31 +248,28 @@ public class ListingService(
         var u = Builders<Listing>.Update.Set(x => x.Quantity, l.Sold + quantity).Set(x => x.UpdatedAt, Now);
         if (l.Status == ListingStatus.SoldOut && l.ExpiresAt > Now) u = u.Set(x => x.Status, ListingStatus.Active);
         await SetFieldsAsync(id, u, ct);
-        await RecomputeProSellerAsync(userId, ct);
         return await GetAsync(id, ct);
     }
 
-    /// <summary>Gia hạn miễn phí: KHÔNG đổi bumpedAt (BR-LST-15, sửa L01).</summary>
-    public async Task<Listing> RenewAsync(string id, string userId, CancellationToken ct)
+    /// <summary>Gia hạn tin hết hạn: tính như một lượt đăng mới (hạn mức tháng hoặc Xu). KHÔNG đổi bumpedAt (BR-LST-15).</summary>
+    public async Task<Listing> RenewAsync(string id, string userId, CancellationToken ct, long? acceptFeeXu = null)
     {
         var l = await GetOwnedAsync(id, userId, ct);
         var user = await users.RequireActiveAsync(userId, ct);
         users.EnsureCanPost(user);
         if (l.Status != ListingStatus.Expired) throw DomainException.Conflict("INVALID_STATE", "Chỉ gia hạn được tin đã hết hạn");
+        var charge = await fees.ChargeAsync(userId, id, l.ChargedCycles + 1, acceptFeeXu, ct);
         var next = l.Available > 0 ? ListingStatus.Active : ListingStatus.SoldOut;
-        await SetFieldsAsync(id, Builders<Listing>.Update.Set(x => x.Status, next)
-            .Set(x => x.ExpiresAt, Now.AddDays(options.ExpiryDays)).Set(x => x.UpdatedAt, Now), ct);
-        await RecomputeProSellerAsync(userId, ct);
+        await SetFieldsAsync(id, Builders<Listing>.Update.Set(x => x.Status, next).Set(x => x.ChargedCycles, charge.Cycle)
+            .Set(x => x.ListingDays, charge.ListingDays).Set(x => x.ExpiresAt, Now.AddDays(charge.ListingDays)).Set(x => x.UpdatedAt, Now), ct);
         return await GetAsync(id, ct);
     }
 
     public async Task DeleteAsync(string id, string userId, CancellationToken ct)
     {
-        var l = await GetOwnedAsync(id, userId, ct);
-        if (l.Reserved > 0) throw DomainException.Conflict("HAS_OPEN_ORDERS", "Tin đang có đơn giao dịch đảm bảo chưa hoàn tất");
+        await GetOwnedAsync(id, userId, ct);
         await SetFieldsAsync(id, Builders<Listing>.Update.Set(x => x.Status, ListingStatus.Deleted).Set(x => x.DeletedAt, Now), ct);
         await moderation.CloseOpenCasesForListingAsync(id, "Người bán đã xóa tin", ct);
-        await RecomputeProSellerAsync(userId, ct);
     }
 
     async Task<Listing> TransitionAsync(string id, string userId, ListingStatus[] from, ListingStatus to, CancellationToken ct)
@@ -278,7 +279,6 @@ public class ListingService(
         var res = await Listings.UpdateOneAsync(x => x.Id == id && x.Status == l.Status,
             Builders<Listing>.Update.Set(x => x.Status, to).Set(x => x.UpdatedAt, Now).Inc(x => x.Version, 1), cancellationToken: ct);
         if (res.ModifiedCount == 0) throw DomainException.Conflict("CONCURRENT_UPDATE", "Tin vừa được cập nhật, vui lòng thử lại");
-        await RecomputeProSellerAsync(userId, ct);
         return await GetAsync(id, ct);
     }
 
@@ -335,7 +335,6 @@ public class ListingService(
 
         if (penalize && reasonCode is not null)
             await moderation.AddViolationAsync(listing.SellerId, reasonCode, ReasonCodes.All[reasonCode].Points, listing.Id, actor.UserId(), ct);
-        await RecomputeProSellerAsync(listing.SellerId, ct);
         return await GetAsync(listing.Id, ct);
     }
 
@@ -373,8 +372,8 @@ public class ListingService(
             throw DomainException.Conflict("ALREADY_REPORTED", "Bạn đã báo cáo tin này");
         }
 
-        var (weight, reporters, escrowScam) = await moderation.ReportStatsAsync(id, ct);
-        var shouldHide = escrowScam || (weight >= 3 && reporters >= 2);
+        var (weight, reporters) = await moderation.ReportStatsAsync(id, ct);
+        var shouldHide = weight >= 3 && reporters >= 2;
         if (shouldHide && listing.Status == ListingStatus.Active)
             await SetFieldsAsync(id, Builders<Listing>.Update.Set(l => l.Status, ListingStatus.TempHidden), ct);
         await moderation.OpenCaseAsync(id, listing.SellerId, CaseTrigger.Report, shouldHide ? CaseQueue.Priority : CaseQueue.Normal,
@@ -402,9 +401,7 @@ public class ListingService(
         var f = Builders<Listing>.Filter;
         var visible = f.In(l => l.Status, [ListingStatus.Active, ListingStatus.Hidden, ListingStatus.SoldOut]);
         var due = visible & (f.Lt(l => l.ExpiresAt, now) | (f.Eq(l => l.Type, ListingType.Buy) & f.Lt(l => l.NeededBy, now)));
-        var sellers = await Listings.Distinct(l => l.SellerId, due, cancellationToken: ct).ToListAsync(ct);
         var res = await Listings.UpdateManyAsync(due, Builders<Listing>.Update.Set(l => l.Status, ListingStatus.Expired), cancellationToken: ct);
-        foreach (var s in sellers) await RecomputeProSellerAsync(s, ct);
         return res.ModifiedCount;
     }
 
@@ -422,14 +419,8 @@ public class ListingService(
     Task SetFieldsAsync(string id, UpdateDefinition<Listing> update, CancellationToken ct) =>
         Listings.UpdateOneAsync(l => l.Id == id, update.Inc(l => l.Version, 1), cancellationToken: ct);
 
-    public async Task RecomputeProSellerAsync(string sellerId, CancellationToken ct)
-    {
-        var user = await users.GetAsync(sellerId, ct);
-        var count = await Listings.CountDocumentsAsync(l => l.SellerId == sellerId && l.Status == ListingStatus.Active
-            && (l.Type == ListingType.Sell || l.Type == ListingType.Rent), cancellationToken: ct);
-        var isPro = ListingRules.IsProSeller(count, user.Flags.HasActivePlan, options.ProSellerThreshold);
-        if (isPro != user.Flags.IsProSeller) await users.SetFlagAsync(sellerId, u => u.Flags.IsProSeller, isPro, ct);
-    }
+    /// <summary>Số ngày hiển thị của lượt đăng đã tính (theo gói lúc đăng); tin cũ chưa có thì dùng mặc định.</summary>
+    int DaysOf(Listing l) => l.ListingDays > 0 ? l.ListingDays : options.ExpiryDays;
 
     async Task ApplyInputAsync(Listing l, ListingInput input, User user, CancellationToken ct)
     {
@@ -465,10 +456,6 @@ public class ListingService(
         var pickup = input.PickupOptions ?? ["PICKUP"];
         if (pickup.Count == 0 || pickup.Any(p => !PickupValues.Contains(p))) errors.Add(new("pickupOptions", $"Hình thức nhận hợp lệ: {string.Join(", ", PickupValues)}"));
 
-        // Giao dịch đảm bảo: chỉ Nhà vườn/Shop đã xác minh, chỉ tin Bán (BR-ESC-01/02, A-07).
-        if (input.EscrowEnabled && (!user.Flags.HasVerifiedGarden || input.Type != ListingType.Sell))
-            errors.Add(new("escrowEnabled", "Chỉ Nhà vườn/Shop đã xác minh mới bật được Giao dịch đảm bảo cho tin Bán"));
-
         if (input.Type == ListingType.Buy && input.NeededBy is { } nb && (nb < Now || nb > Now.AddDays(options.BuyRequestMaxDays)))
             errors.Add(new("neededBy", $"Hạn cần hàng phải trong vòng {options.BuyRequestMaxDays} ngày tới"));
 
@@ -501,13 +488,10 @@ public class ListingService(
             verificationId = (await media.GetOwnedAsync([input.VerificationMediaId], user.Id, ct))[0].Id;
         }
 
-        // Tin của người bán cá nhân chỉ lưu vị trí làm tròn ~1km (BR-MAP-02).
+        // Chỉ lưu vị trí làm tròn ~1km để giữ kín địa chỉ người bán (BR-MAP-02).
         GeoJsonPoint<GeoJson2DGeographicCoordinates>? location = null;
         if (input.Lat is { } lat && input.Lng is { } lng)
-        {
-            if (!user.Flags.HasActivePlan) { lat = Math.Round(lat, 2); lng = Math.Round(lng, 2); }
-            location = GeoJson.Point(GeoJson.Geographic(lng, lat));
-        }
+            location = GeoJson.Point(GeoJson.Geographic(Math.Round(lng, 2), Math.Round(lat, 2)));
 
         l.Type = input.Type;
         l.CategoryId = category.Id;
@@ -536,7 +520,6 @@ public class ListingService(
         l.WardId = input.WardId;
         l.Location = location;
         l.PickupOptions = pickup.Distinct().ToList();
-        l.EscrowEnabled = input.EscrowEnabled;
         l.Media = mediaItems.Select(m => new ListingMediaRef { MediaId = m.Id, PHash = m.PHash, CapturedInApp = m.CapturedInApp, CapturedAt = m.CapturedAt }).ToList();
         l.VerificationMediaId = verificationId;
         l.SortPrice = SortPriceOf(l);
@@ -565,10 +548,10 @@ public class ListingService(
         return refs is { Count: > 0 } ? refs.Max(r => r.MedianVnd) : null;
     }
 
-    /// <summary>BR-AUTH-07: tài khoản cá nhân mới (&lt; 7 ngày) tối đa 5 tin giá cao đang hiển thị.</summary>
+    /// <summary>BR-AUTH-07: tài khoản mới (&lt; 7 ngày) tối đa 5 tin giá cao đang hiển thị.</summary>
     async Task EnsureNewAccountHighValueLimitAsync(User user, Listing listing, CancellationToken ct)
     {
-        if (user.Flags.HasVerifiedGarden || user.CreatedAt <= Now.AddDays(-options.NewAccountDays)) return;
+        if (user.CreatedAt <= Now.AddDays(-options.NewAccountDays)) return;
         if (listing.EffectivePrice is not { } price || price < options.HighValuePriceVnd) return;
         var active = await Listings.CountDocumentsAsync(x => x.SellerId == user.Id && x.Id != listing.Id
             && (x.Status == ListingStatus.Active || x.Status == ListingStatus.PendingReview) && x.SortPrice >= options.HighValuePriceVnd, cancellationToken: ct);
@@ -598,8 +581,6 @@ public class ListingService(
         var ctx = new RiskContext(title, description, category, species, attributes,
             listing.EffectivePrice, await SpeciesMedianAsync(speciesId, ct),
             IsNewAccount: user.CreatedAt > Now.AddDays(-options.NewAccountDays),
-            IsIndividual: !user.Flags.HasVerifiedGarden,
-            IsTrustedGarden: user.Flags.HasActivePlan && user.ActiveViolationPoints == 0 && user.CreatedAt < Now.AddDays(-90),
             RecentRejections: await moderation.RecentRejectionsAsync(user.Id, ct),
             HasForeignPhoto: await HasForeignPhotoAsync(user.Id, mediaRefs, ct),
             options.HighValuePriceVnd, options.ManualReviewPriceVnd);

@@ -18,7 +18,6 @@ public class PricingException(string code, string message, object? details = nul
 public class PricingService(IMongoDatabase db, TimeProvider clock)
 {
     readonly IMongoCollection<PriceBook> _books = db.GetCollection<PriceBook>("priceBooks");
-    public static readonly TimeSpan GardenPriceIncreaseNotice = TimeSpan.FromDays(7);
 
     public async Task EnsureIndexesAsync(CancellationToken ct = default)
     {
@@ -109,7 +108,7 @@ public class PricingService(IMongoDatabase db, TimeProvider clock)
         return book;
     }
 
-    /// <summary>BR-PRC-03 maker-checker, BR-PRC-04 lên lịch, BR-PRC-07 báo trước khi tăng giá gói.</summary>
+    /// <summary>BR-PRC-03 maker-checker, BR-PRC-04 lên lịch.</summary>
     public async Task<PriceBook> ApproveAsync(string id, string approver, DateTime? effectiveFrom, bool warningsAcknowledged, CancellationToken ct = default)
     {
         var book = await Require(id, ct);
@@ -127,8 +126,6 @@ public class PricingService(IMongoDatabase db, TimeProvider clock)
         var now = clock.GetUtcNow().UtcDateTime;
         var start = effectiveFrom ?? now;
         if (start < now) start = now;
-        if (active is not null && PriceBookValidator.IncreasesGardenPlanPrice(book, active) && start < now + GardenPriceIncreaseNotice)
-            throw new PricingException("NOTICE_REQUIRED", "Tăng giá gói Nhà vườn phải có hiệu lực sau ít nhất 7 ngày kể từ lúc duyệt");
 
         await _books.UpdateOneAsync(b => b.Id == id, Builders<PriceBook>.Update
             .Set(b => b.Status, PriceBookStatus.Scheduled)
@@ -163,22 +160,6 @@ public class PricingService(IMongoDatabase db, TimeProvider clock)
             .Set(b => b.Status, PriceBookStatus.Expired).Set(b => b.EffectiveTo, now), cancellationToken: ct);
         await SetStatus(due.Id, PriceBookStatus.Active, ct);
         return true;
-    }
-
-    public async Task<PriceQuote> QuoteAsync(string serviceCode, int? days, QuoteContext ctx, CancellationToken ct = default)
-    {
-        var active = await GetActiveAsync(ct) ?? throw new PricingException("NO_ACTIVE_PRICE_BOOK", "Chưa có bảng giá hiệu lực");
-        return PriceCalculator.Quote(active, serviceCode, days, ctx)
-            ?? throw new PricingException("SERVICE_UNAVAILABLE", "Dịch vụ không khả dụng cho danh mục này");
-    }
-
-    /// <summary>BR-PRC-06: nếu giá đã đổi so với lúc người dùng xem thì từ chối, trả giá mới.</summary>
-    public async Task<PriceQuote> ConfirmQuoteAsync(string serviceCode, int? days, QuoteContext ctx, int expectedVersion, long expectedPrice, CancellationToken ct = default)
-    {
-        var quote = await QuoteAsync(serviceCode, days, ctx, ct);
-        if (quote.PriceBookVersion != expectedVersion || quote.FinalPrice != expectedPrice)
-            throw new PricingException("PRICE_CHANGED", "Giá đã thay đổi, vui lòng xác nhận lại", quote);
-        return quote;
     }
 
     async Task<PriceBook> Require(string id, CancellationToken ct) =>

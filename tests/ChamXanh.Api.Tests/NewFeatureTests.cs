@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using ChamXanh.Api.Common.Auth;
-using ChamXanh.Api.Modules.Escrow;
 using ChamXanh.Api.Modules.PlantCare;
 using ChamXanh.Api.Modules.Wallet;
 using Microsoft.AspNetCore.Hosting;
@@ -38,13 +37,6 @@ public class ReminderScheduleTests
         Assert.Equal(new DateTime(2027, 1, 1), ReminderSchedule.NextAfter(R(anchor, ReminderRepeat.Yearly), anchor.AddDays(3)));
     }
 
-    [Fact]
-    public void Payout_charges_fee_only_on_kept_goods()
-    {
-        Assert.Equal(1_010_000, EscrowService.SellerPayout(1_000_000, 50_000, 40_000, "SELLER", 0));
-        Assert.Equal(0, EscrowService.SellerPayout(1_000_000, 50_000, 40_000, "SELLER", 1_050_000));
-        Assert.Equal(528_000, EscrowService.SellerPayout(1_000_000, 50_000, 40_000, "SELLER", 500_000)); // giữ 550k, phí 40k × 550/1000 = 22k
-    }
 }
 
 [Collection(ApiCollection.Name)]
@@ -53,7 +45,6 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
     protected override void ConfigureSettings(IWebHostBuilder b)
     {
         b.UseSetting("Listings:RandomAuditRate", "0");
-        b.UseSetting("Features:escrow", "true");
     }
 
     IMongoDatabase Db => Factory.Services.GetRequiredService<IMongoDatabase>();
@@ -78,7 +69,7 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
         return (await (await c.PostAsync(url, form)).EnsureOk()).GetProperty("id").GetString()!;
     }
 
-    static async Task<string> Listing(HttpClient c, bool escrow = false, string type = "Sell", object? rent = null, int quantity = 1)
+    static async Task<string> Listing(HttpClient c, string type = "Sell", object? rent = null, int quantity = 1)
     {
         var media = new List<string> { await Upload(c), await Upload(c), await Upload(c) };
         var l = await (await c.PostAsJsonAsync("/api/listings", new
@@ -88,36 +79,11 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
                 type, categoryId = "noi-that", speciesId = "trau-ba", title = "Trầu bà leo cột cao 1m2", description = "Cây khỏe, lá xanh, leo cột dừa, hợp phòng khách",
                 price = type is "Sell" ? (long?)350_000 : null, budgetMax = type == "Buy" ? 400_000 : (long?)null, rent, quantity,
                 attributes = new { tinhTrang = "Trồng chậu", chieuCao = 120 }, mediaIds = type == "Buy" ? new List<string>() : media,
-                escrowEnabled = escrow, lat = 10.03, lng = 105.78,
+                lat = 10.03, lng = 105.78,
             },
             submit = true,
         })).EnsureOk();
         return l.GetProperty("id").GetString()!;
-    }
-
-    async Task<(HttpClient Client, string Id)> VerifiedGarden()
-    {
-        var (owner, ownerId) = await Member();
-        var photos = new List<string> { await Upload(owner), await Upload(owner) };
-        var docs = new List<string> { await Upload(owner, "KycDocument"), await Upload(owner, "KycDocument") };
-        var idNumber = $"0790800{Random.Shared.Next(10000, 99999)}";
-        var applied = await (await owner.PostAsJsonAsync("/api/garden/application", new
-        {
-            name = "Vườn test " + idNumber, type = "Garden", description = "Test", address = "Ấp 1", provinceId = "86", lat = 10.26, lng = 106.13,
-            openingHours = "7h-17h", allowVisit = true, photoMediaIds = photos, method = "VideoCall", idNumber, fullName = "Nguyễn Văn Tư",
-            dateOfBirth = "1980-05-12", documentMediaIds = docs, bankCode = "VCB", bankAccountNo = "0123456789", bankAccountName = "NGUYEN VAN TU",
-        })).EnsureOk();
-        var super = await SuperAdmin();
-        (await super.PostAsJsonAsync($"/api/admin/gardens/{applied.GetProperty("profile").GetProperty("id").GetString()}/review", new { decision = "Approve" })).EnsureSuccessStatusCode();
-        return (owner, ownerId);
-    }
-
-    async Task<JsonElement> PayWebhook(string orderId, long amount)
-    {
-        var raw = JsonSerializer.Serialize(new { orderId, status = "PAID", amountVnd = amount, gatewayRef = "GW-" + orderId }, JsonSerializerOptions.Web);
-        var req = new HttpRequestMessage(HttpMethod.Post, "/api/escrow/webhook") { Content = new StringContent(raw, Encoding.UTF8, "application/json") };
-        req.Headers.Add("X-Signature", TopUpService.Sign(Secret, raw));
-        return await (await Anonymous().SendAsync(req)).EnsureOk();
     }
 
     // ---------------- Hồ sơ vườn + nhắc tưới ----------------
@@ -196,92 +162,6 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
         (await editor.DeleteAsync($"/api/admin/explore/{now.GetProperty("id").GetString()}")).EnsureSuccessStatusCode();
     }
 
-    // ---------------- Giao dịch đảm bảo ----------------
-
-    [Fact]
-    public async Task Escrow_flow_delivery_dispute_partial_refund_payout_and_review()
-    {
-        var (seller, sellerId) = await VerifiedGarden();
-        var listingId = await Listing(seller, escrow: true);
-        var (buyer, buyerId) = await Member();
-
-        Assert.Equal("CANNOT_BUY_OWN", await (await seller.PostAsJsonAsync("/api/escrow/orders", new { listingId, delivery = "SellerDelivery", deliveryAddress = "Q1" })).ErrorCode());
-        var order = await (await buyer.PostAsJsonAsync("/api/escrow/orders", new { listingId, delivery = "SellerDelivery", shippingFee = 30_000, deliveryAddress = "12 Lê Lợi, Q1" })).EnsureOk();
-        var id = order.GetProperty("id").GetString()!;
-        Assert.Equal(380_000, order.GetProperty("total").GetInt64());
-        Assert.False(order.TryGetProperty("pickupCode", out _));
-        // Chỉ 1 cây: người thứ hai không giữ chỗ được (BR-ESC-17)
-        Assert.Equal("OUT_OF_STOCK", await (await (await Member()).Client.PostAsJsonAsync("/api/escrow/orders", new { listingId, delivery = "SellerDelivery", deliveryAddress = "Q3" })).ErrorCode());
-
-        (await buyer.PostAsync($"/api/escrow/orders/{id}/pay", null)).EnsureSuccessStatusCode();
-        Assert.Equal("AwaitingSellerConfirm", (await PayWebhook(id, 380_000)).GetProperty("status").GetString());
-        Assert.Equal("AwaitingSellerConfirm", (await PayWebhook(id, 380_000)).GetProperty("status").GetString()); // gửi lại: idempotent
-
-        (await seller.PostAsync($"/api/escrow/orders/{id}/confirm", null)).EnsureSuccessStatusCode();
-        (await seller.PostAsJsonAsync($"/api/escrow/orders/{id}/ship", new { })).EnsureSuccessStatusCode();
-        Assert.Equal("PROOF_REQUIRED", await (await seller.PostAsJsonAsync($"/api/escrow/orders/{id}/delivered", new { })).ErrorCode());
-        (await seller.PostAsJsonAsync($"/api/escrow/orders/{id}/delivered", new { mediaIds = new[] { await Upload(seller) } })).EnsureSuccessStatusCode();
-
-        Assert.Equal("EVIDENCE_REQUIRED", await (await buyer.PostAsJsonAsync($"/api/escrow/orders/{id}/dispute", new { reason = "DeadOrWilted", description = "Cây héo rũ khi mở hộp", hasUnboxingVideo = true })).ErrorCode());
-        (await buyer.PostAsJsonAsync($"/api/escrow/orders/{id}/dispute", new { reason = "DeadOrWilted", description = "Cây héo rũ khi mở hộp", mediaIds = new[] { await Upload(buyer) }, hasUnboxingVideo = true })).EnsureSuccessStatusCode();
-        (await seller.PostAsJsonAsync($"/api/escrow/orders/{id}/dispute/respond", new { response = "OfferPartialRefund", amount = 100_000, note = "Hỗ trợ 100k" })).EnsureSuccessStatusCode();
-        var resolved = await (await buyer.PostAsync($"/api/escrow/orders/{id}/dispute/accept-proposal", null)).EnsureOk();
-        Assert.Equal("PartiallyRefunded", resolved.GetProperty("status").GetString());
-        Assert.Equal(100_000, resolved.GetProperty("refundAmount").GetInt64());
-
-        // Quyết toán T+1: kế toán duyệt sau hạn
-        var accountant = await Admin("acc.x", AdminRoles.Accountant);
-        Assert.Equal("TOO_EARLY", await (await accountant.PostAsync($"/api/admin/escrow/orders/{id}/payout", null)).ErrorCode());
-        await Db.GetCollection<EscrowOrder>("escrowOrders").UpdateOneAsync(o => o.Id == id, Builders<EscrowOrder>.Update.Set(o => o.PayoutEligibleAt, DateTime.UtcNow.AddMinutes(-1)));
-        var settled = await (await accountant.PostAsync($"/api/admin/escrow/orders/{id}/payout", null)).EnsureOk();
-        Assert.Equal("Settled", settled.GetProperty("status").GetString());
-        Assert.True(settled.GetProperty("payoutAmount").GetInt64() is > 0 and < 280_000);
-
-        var review = await (await buyer.PostAsJsonAsync($"/api/escrow/orders/{id}/review", new { stars = 4, text = "Hỗ trợ nhanh" })).EnsureOk();
-        Assert.Equal("Purchased", review.GetProperty("tier").GetString());
-        Assert.Equal("ALREADY_REVIEWED", await (await buyer.PostAsJsonAsync($"/api/escrow/orders/{id}/review", new { stars = 5 })).ErrorCode());
-        Assert.Contains((await (await buyer.GetAsync("/api/me/notifications")).EnsureOk()).GetProperty("items").EnumerateArray(), n => n.GetProperty("type").GetString() == "escrow");
-        _ = sellerId; _ = buyerId;
-    }
-
-    [Fact]
-    public async Task Escrow_pickup_by_qr_and_unpaid_order_expires_releasing_stock()
-    {
-        var (seller, _) = await VerifiedGarden();
-        var listingId = await Listing(seller, escrow: true, quantity: 2);
-        var (buyer, _) = await Member();
-
-        // Đơn không thanh toán: hết hạn → trả lại số lượng
-        var stale = await (await buyer.PostAsJsonAsync("/api/escrow/orders", new { listingId, quantity = 2, delivery = "BuyerPickup", pickupDate = DateTime.UtcNow.Date.AddDays(1) })).EnsureOk();
-        Assert.Equal("OUT_OF_STOCK", await (await buyer.PostAsJsonAsync("/api/escrow/orders", new { listingId, delivery = "BuyerPickup", pickupDate = DateTime.UtcNow.Date.AddDays(1) })).ErrorCode());
-        var staleId = stale.GetProperty("id").GetString();
-        await Db.GetCollection<EscrowOrder>("escrowOrders").UpdateOneAsync(o => o.Id == staleId, Builders<EscrowOrder>.Update.Set(o => o.PaymentDueAt, DateTime.UtcNow.AddMinutes(-1)));
-        using (var scope = Factory.Services.CreateScope())
-            await scope.ServiceProvider.GetRequiredService<EscrowService>().RunDeadlinesAsync(default);
-        // Tiền về muộn sau khi hủy: tự hoàn (BR-ESC-18)
-        Assert.Equal("Cancelled", (await PayWebhook(staleId!, 700_000)).GetProperty("status").GetString());
-
-        var order = await (await buyer.PostAsJsonAsync("/api/escrow/orders", new { listingId, delivery = "BuyerPickup", pickupDate = DateTime.UtcNow.Date.AddDays(1) })).EnsureOk();
-        var id = order.GetProperty("id").GetString()!;
-        await PayWebhook(id, order.GetProperty("total").GetInt64());
-        (await seller.PostAsync($"/api/escrow/orders/{id}/confirm", null)).EnsureSuccessStatusCode();
-        Assert.Equal(HttpStatusCode.Forbidden, (await seller.GetAsync($"/api/escrow/orders/{id}/pickup-code")).StatusCode);
-        var code = (await (await buyer.GetAsync($"/api/escrow/orders/{id}/pickup-code")).EnsureOk()).GetProperty("code").GetString();
-        Assert.Equal("INVALID_PICKUP_CODE", await (await seller.PostAsJsonAsync($"/api/escrow/orders/{id}/pickup", new { code = "WRONG" })).ErrorCode());
-        var done = await (await seller.PostAsJsonAsync($"/api/escrow/orders/{id}/pickup", new { code })).EnsureOk();
-        Assert.Equal("Completed", done.GetProperty("status").GetString());
-    }
-
-    [Fact]
-    public async Task Escrow_is_hidden_behind_feature_flag()
-    {
-        var super = await SuperAdmin();
-        (await super.PutAsJsonAsync("/api/admin/features/escrow", new { enabled = false, note = "Chưa ký đối tác" })).EnsureSuccessStatusCode();
-        var (buyer, _) = await Member();
-        Assert.Equal("FEATURE_DISABLED", await (await buyer.PostAsJsonAsync("/api/escrow/orders", new { listingId = "000000000000000000000000", delivery = "SellerDelivery", deliveryAddress = "x" })).ErrorCode());
-        Assert.False((await (await Anonymous().GetAsync("/api/features")).EnsureOk()).GetProperty("escrow").GetBoolean());
-    }
-
     // ---------------- Cộng đồng ----------------
 
     [Fact]
@@ -348,27 +228,22 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
     }
 
     [Fact]
-    public async Task Account_deletion_is_blocked_by_open_orders_then_anonymizes()
+    public async Task Account_deletion_reports_losses_needs_ack_then_anonymizes()
     {
-        var (seller, _) = await VerifiedGarden();
-        var listingId = await Listing(seller, escrow: true);
-        var (buyer, buyerId) = await Member();
-        var order = await (await buyer.PostAsJsonAsync("/api/escrow/orders", new { listingId, delivery = "SellerDelivery", deliveryAddress = "Q1" })).EnsureOk();
-        await PayWebhook(order.GetProperty("id").GetString()!, order.GetProperty("total").GetInt64());
-
-        var check = await (await buyer.GetAsync("/api/me/account/deletion-check")).EnsureOk();
-        Assert.False(check.GetProperty("canDelete").GetBoolean());
-        var otp = (await (await buyer.PostAsync("/api/me/account/deletion-otp", null)).EnsureOk()).GetProperty("devCode").GetString();
-        Assert.Equal("OPEN_ORDERS", await (await buyer.PostAsJsonAsync("/api/me/account/delete", new { otpCode = otp, acknowledgeLosses = true })).ErrorCode());
-
         var (member, memberId) = await Member();
+        var pay = await (await member.PostAsJsonAsync("/api/plans/checkout", new { plan = "Plus", months = 1 })).EnsureOk();
+        (await member.PostAsync($"/api/plans/payments/{pay.GetProperty("id").GetString()}/simulate", null)).EnsureSuccessStatusCode();
         (await member.PostAsJsonAsync("/api/me/garden/plants", new { name = "Sen đá" })).EnsureSuccessStatusCode();
+
+        var check = await (await member.GetAsync("/api/me/account/deletion-check")).EnsureOk();
+        Assert.True(check.GetProperty("canDelete").GetBoolean());
+        Assert.InRange(check.GetProperty("losses").GetProperty("planDaysLeft").GetInt32(), 28, 31);
+
         var code = (await (await member.PostAsync("/api/me/account/deletion-otp", null)).EnsureOk()).GetProperty("devCode").GetString();
         Assert.Equal("ACK_REQUIRED", await (await member.PostAsJsonAsync("/api/me/account/delete", new { otpCode = code, acknowledgeLosses = false })).ErrorCode());
         (await member.PostAsJsonAsync("/api/me/account/delete", new { otpCode = code, acknowledgeLosses = true })).EnsureSuccessStatusCode();
         var pub = await (await Anonymous().GetAsync($"/api/users/{memberId}")).EnsureOk();
         Assert.Equal("Người dùng đã xóa", pub.GetProperty("displayName").GetString());
-        _ = buyerId;
     }
 
     [Fact]
@@ -384,8 +259,9 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
         var super = await SuperAdmin();
         var dash = await (await super.GetAsync("/api/admin/reports/dashboard")).EnsureOk();
         Assert.True(dash.GetProperty("users").GetProperty("total").GetInt64() >= 1);
-        var csv = await super.GetAsync("/api/admin/reports/export/escrow-orders");
-        Assert.Equal("text/csv", csv.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(JsonValueKind.Number, dash.GetProperty("revenue7d").GetProperty("planVnd").ValueKind);
+        foreach (var kind in new[] { "plan-payments", "topups", "listing-fees" })
+            Assert.Equal("text/csv", (await super.GetAsync($"/api/admin/reports/export/{kind}")).Content.Headers.ContentType?.MediaType);
 
         var mod = await Admin("mod.z", AdminRoles.Moderator);
         (await mod.PostAsJsonAsync($"/api/admin/members/{memberId}/sanction", new { action = "lock", days = 3, reason = "Spam" })).EnsureSuccessStatusCode();

@@ -16,8 +16,7 @@ public class PricingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health")).StatusCode);
         var current = await (await client.GetAsync("/api/pricing/current")).EnsureOk();
         Assert.Equal(1, current.GetProperty("version").GetInt32());
-        var quote = await (await client.GetAsync("/api/pricing/quote?service=PRIORITY&days=7&categoryId=bonsai-mini")).EnsureOk<PriceQuote>();
-        Assert.Equal(350, quote.FinalPrice);
+        Assert.Equal(5, current.GetProperty("topUpPackages").GetArrayLength());
     }
 
     [Fact]
@@ -42,9 +41,9 @@ public class PricingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
         Assert.Equal(2, draft.Version);
         Assert.Equal("marketing.lan", draft.CreatedBy);
 
-        draft.ListingServices.First(s => s.Code == "BUMP").Prices["STANDARD"] = 12;
+        draft.TopUpPackages.First(p => p.Code == "RUNG").BonusXu = 150;
         (await maker.PutAsJsonAsync($"/api/admin/price-books/{draft.Id}", draft, Json)).EnsureSuccessStatusCode();
-        (await maker.PostAsync($"/api/admin/price-books/{draft.Id}/submit", null)).EnsureSuccessStatusCode();
+        await (await maker.PostAsync($"/api/admin/price-books/{draft.Id}/submit", null)).EnsureOk();
 
         // Marketing không có quyền duyệt (RBAC 02 §4.1)
         var denied = await maker.PostAsJsonAsync($"/api/admin/price-books/{draft.Id}/approve", new { effectiveFrom = (DateTime?)null, warningsAcknowledged = true });
@@ -56,8 +55,8 @@ public class PricingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
         Assert.Equal(PriceBookStatus.Active, books.Single(b => b.Version == 2).Status);
         Assert.Equal(PriceBookStatus.Expired, books.Single(b => b.Version == 1).Status);
 
-        var quote = await (await Anonymous().GetAsync("/api/pricing/quote?service=BUMP&categoryId=sen-da")).EnsureOk<PriceQuote>();
-        Assert.Equal(12, quote.FinalPrice);
+        var current = await (await Anonymous().GetAsync("/api/pricing/current")).EnsureOk();
+        Assert.Equal(150, current.GetProperty("topUpPackages").EnumerateArray().First(p => p.GetProperty("code").GetString() == "RUNG").GetProperty("bonusXu").GetInt64());
     }
 
     [Fact]
@@ -78,38 +77,18 @@ public class PricingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
         var checker = await SuperAdmin();
         var draft = await (await maker.PostAsJsonAsync("/api/admin/price-books", new { sourceVersion = (int?)null })).EnsureOk<PriceBook>();
 
-        draft.EscrowFee.Pct = 50;
+        draft.TopUpPackages[0].BonusXu = 40; // vượt 50% Xu nạp
         await maker.PutAsJsonAsync($"/api/admin/price-books/{draft.Id}", draft, Json);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, (await maker.PostAsync($"/api/admin/price-books/{draft.Id}/submit", null)).StatusCode);
 
-        draft.EscrowFee.Pct = 4;
-        draft.ListingServices.First(s => s.Code == "PRIORITY" && s.Days == 7).Prices["STANDARD"] = 60;
+        draft.TopUpPackages[0].BonusXu = 0;
+        draft.TopUpPackages.Single(p => p.Code == "RUNG").BonusXu = 10; // gói lớn thưởng ít hơn gói nhỏ: cảnh báo
         await maker.PutAsJsonAsync($"/api/admin/price-books/{draft.Id}", draft, Json);
         (await maker.PostAsync($"/api/admin/price-books/{draft.Id}/submit", null)).EnsureSuccessStatusCode();
 
         var noAck = await checker.PostAsJsonAsync($"/api/admin/price-books/{draft.Id}/approve", new { effectiveFrom = (DateTime?)null, warningsAcknowledged = false });
         Assert.Equal("WARNINGS_NOT_ACKNOWLEDGED", await noAck.ErrorCode());
         (await checker.PostAsJsonAsync($"/api/admin/price-books/{draft.Id}/approve", new { effectiveFrom = (DateTime?)null, warningsAcknowledged = true })).EnsureSuccessStatusCode();
-    }
-
-    [Fact]
-    public async Task Garden_price_increase_requires_seven_days_notice()
-    {
-        var maker = await Admin("mkt.c", AdminRoles.Marketing);
-        var checker = await SuperAdmin();
-        var draft = await (await maker.PostAsJsonAsync("/api/admin/price-books", new { sourceVersion = (int?)null })).EnsureOk<PriceBook>();
-        draft.GardenPlans[0].PriceVnd = 219_000;
-        await maker.PutAsJsonAsync($"/api/admin/price-books/{draft.Id}", draft, Json);
-        await maker.PostAsync($"/api/admin/price-books/{draft.Id}/submit", null);
-
-        var tooSoon = await checker.PostAsJsonAsync($"/api/admin/price-books/{draft.Id}/approve", new { effectiveFrom = (DateTime?)null, warningsAcknowledged = true });
-        Assert.Equal("NOTICE_REQUIRED", await tooSoon.ErrorCode());
-
-        var scheduled = await (await checker.PostAsJsonAsync($"/api/admin/price-books/{draft.Id}/approve",
-            new { effectiveFrom = DateTime.UtcNow.AddDays(8), warningsAcknowledged = true })).EnsureOk<PriceBook>();
-        Assert.Equal(PriceBookStatus.Scheduled, scheduled.Status);
-        var current = await (await Anonymous().GetAsync("/api/pricing/current")).EnsureOk();
-        Assert.Equal(1, current.GetProperty("version").GetInt32());
     }
 
     [Fact]

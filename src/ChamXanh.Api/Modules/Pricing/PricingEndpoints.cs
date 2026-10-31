@@ -18,17 +18,11 @@ public static class PricingEndpoints
             await svc.GetActiveAsync(ct) is { } book
                 ? Results.Ok(new
                 {
-                    book.Version, book.EffectiveFrom, book.ListingServices, book.GardenPlans,
+                    book.Version, book.EffectiveFrom,
                     TopUpPackages = book.TopUpPackages.Where(p => p.Enabled),
-                    EscrowFee = new { book.EscrowFee.Pct, book.EscrowFee.MinVnd, book.EscrowFee.MaxVnd },
                 })
                 : Results.NotFound());
 
-        pub.MapGet("/quote", async (string service, int? days, string categoryId, string? collectionIds, PricingService svc, TimeProvider clock, CancellationToken ct) =>
-        {
-            var ctx = new QuoteContext(categoryId, SplitIds(collectionIds), clock.GetUtcNow().UtcDateTime);
-            return Results.Ok(await svc.QuoteAsync(service, days, ctx, ct));
-        });
 
         var admin = app.MapGroup("/api/admin/price-books").WithTags("Admin Pricing");
         var view = Policies.ForPerm(Perm.PricingView);
@@ -77,18 +71,5 @@ public static class PricingEndpoints
             await audit.LogAsync(p, "pricing.reject", "priceBook", id, reason: req.Reason, ct: ct);
             return Results.Ok(book);
         }).RequireAuthorization(approve);
-
-        admin.MapGet("/preview", async (string categoryId, string? collectionIds, DateTime? at, PricingService svc, TimeProvider clock, CancellationToken ct) =>
-        {
-            var book = await svc.GetActiveAsync(ct);
-            if (book is null) return Results.NotFound();
-            var ctx = new QuoteContext(categoryId, SplitIds(collectionIds), at ?? clock.GetUtcNow().UtcDateTime);
-            var quotes = book.ListingServices.Where(s => s.Enabled)
-                .Select(s => PriceCalculator.Quote(book, s.Code, s.Days, ctx)).Where(q => q is not null);
-            return Results.Ok(quotes);
-        }).RequireAuthorization(view);
     }
-
-    static string[] SplitIds(string? csv) =>
-        string.IsNullOrWhiteSpace(csv) ? [] : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

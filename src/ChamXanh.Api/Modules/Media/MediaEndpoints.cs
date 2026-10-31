@@ -49,7 +49,7 @@ public static class MediaEndpoints
             var item = await media.FindAsync(id, ct);
             if (item is null || !item.Secure) return Results.NotFound();
             var isOwner = !p.IsAdmin() && item.OwnerId == p.UserId();
-            var needed = item.Kind == MediaKind.KycDocument ? Perm.KycView : Perm.DisputeResolve;
+            var needed = Perm.DisputeResolve;
             var isAllowedAdmin = p.IsAdmin() && p.HasClaim(Claims.Mfa, "true") && p.HasClaim(Claims.Perm, needed);
             if (!isOwner && !isAllowedAdmin) return Results.Forbid();
             if (isAllowedAdmin) await audit.LogAsync(p, "media.view_secure", "media", id, ct: ct);

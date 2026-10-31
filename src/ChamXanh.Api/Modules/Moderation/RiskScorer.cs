@@ -25,12 +25,11 @@ public class ModerationConfig
     public int WeightPriceDeviation { get; set; } = 20;
     public int WeightForeignPhoto { get; set; } = 30;
     public int WeightHighPrice { get; set; } = 20;
-    public int TrustedGardenBonus { get; set; } = -20;
 }
 
 public record RiskContext(
     string Title, string Description, Category Category, Species? Species, IReadOnlyDictionary<string, object> Attributes,
-    long? EffectivePrice, long? SpeciesMedianPrice, bool IsNewAccount, bool IsIndividual, bool IsTrustedGarden,
+    long? EffectivePrice, long? SpeciesMedianPrice, bool IsNewAccount,
     int RecentRejections, bool HasForeignPhoto, long HighValueThreshold, long ManualReviewPrice);
 
 public enum RiskRoute { AutoReject, ManualPriority, Manual, AutoApprove }
@@ -67,7 +66,7 @@ public static class RiskScorer
         var score = 0;
         void Add(int w, string s) { score += w; signals.Add(s); }
         if (c.IsNewAccount) Add(cfg.WeightNewAccount, "new_account");
-        if (c.IsIndividual && c.EffectivePrice > c.HighValueThreshold) Add(cfg.WeightIndividualHighValue, "individual_high_value");
+        if (c.EffectivePrice > c.HighValueThreshold) Add(cfg.WeightIndividualHighValue, "high_value");
         if (c.RecentRejections > 0) Add(cfg.WeightRecentRejection * c.RecentRejections, $"recent_rejections:{c.RecentRejections}");
         if (c.EffectivePrice is > 0 && c.SpeciesMedianPrice is > 0
             && Math.Abs(c.EffectivePrice.Value - c.SpeciesMedianPrice.Value) * 2 > c.SpeciesMedianPrice.Value)
@@ -76,7 +75,6 @@ public static class RiskScorer
             Add(w, $"risky_term:{term}");
         if (c.HasForeignPhoto) Add(cfg.WeightForeignPhoto, "photo_matches_other_seller");
         if (c.EffectivePrice >= c.ManualReviewPrice) Add(cfg.WeightHighPrice, "high_price");
-        if (c.IsTrustedGarden) Add(cfg.TrustedGardenBonus, "trusted_garden");
         score = Math.Clamp(score, 0, 100);
 
         var route = score >= priorityFrom ? RiskRoute.ManualPriority

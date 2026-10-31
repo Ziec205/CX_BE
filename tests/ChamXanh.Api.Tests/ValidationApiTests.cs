@@ -9,7 +9,6 @@ namespace ChamXanh.Api.Tests;
 [Collection(ApiCollection.Name)]
 public class ValidationApiTests(MongoFixture mongo) : ApiTestBase(mongo)
 {
-    protected override void ConfigureSettings(IWebHostBuilder b) => b.UseSetting("Features:escrow", "true");
 
     async Task<(HttpClient Client, string PlantId)> MemberWithPlant()
     {
@@ -93,7 +92,6 @@ public class ValidationApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     [InlineData("/api/me/garden/upcoming")]
     [InlineData("/api/me/notifications")]
     [InlineData("/api/me/notifications/settings")]
-    [InlineData("/api/escrow/orders")]
     [InlineData("/api/me/rentals")]
     [InlineData("/api/support/tickets")]
     [InlineData("/api/me/account/deletion-check")]
@@ -134,7 +132,6 @@ public class ValidationApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     [Theory]
     [InlineData(AdminRoles.Moderator)]
     [InlineData(AdminRoles.Accountant)]
-    [InlineData(AdminRoles.Verification)]
     public async Task Only_content_roles_manage_articles(string role)
     {
         var admin = await Admin($"r.{Guid.NewGuid():N}"[..12], role);
@@ -200,37 +197,13 @@ public class ValidationApiTests(MongoFixture mongo) : ApiTestBase(mongo)
 
     // ---------- Giao dịch đảm bảo ----------
 
-    [Fact]
-    public async Task Escrow_order_for_unknown_listing_is_404()
-    {
-        var (c, _) = await Member();
-        Assert.Equal(HttpStatusCode.NotFound, (await c.PostAsJsonAsync("/api/escrow/orders", new { listingId = "000000000000000000000000", delivery = "SellerDelivery", deliveryAddress = "Q1" })).StatusCode);
-    }
-
-    [Fact]
-    public async Task Escrow_order_of_someone_else_is_hidden()
-    {
-        var (c, _) = await Member();
-        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync("/api/escrow/orders/000000000000000000000000")).StatusCode);
-    }
-
     [Theory]
-    [InlineData("{\"orderId\":\"000000000000000000000000\",\"status\":\"PAID\",\"amountVnd\":1,\"gatewayRef\":\"x\"}", "bad-signature")]
-    [InlineData("{\"orderId\":\"000000000000000000000000\",\"status\":\"PAID\",\"amountVnd\":1,\"gatewayRef\":\"x\"}", null)]
-    public async Task Escrow_webhook_requires_valid_signature(string raw, string? signature)
-    {
-        var req = new HttpRequestMessage(HttpMethod.Post, "/api/escrow/webhook") { Content = new StringContent(raw, System.Text.Encoding.UTF8, "application/json") };
-        if (signature is not null) req.Headers.Add("X-Signature", signature);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await Anonymous().SendAsync(req)).StatusCode);
-    }
-
-    [Theory]
-    [InlineData("/api/admin/escrow/payouts", AdminRoles.Moderator)]
-    [InlineData("/api/admin/escrow/payouts", AdminRoles.Support)]
+    [InlineData("/api/admin/wallets/adjustments", AdminRoles.Moderator)]
+    [InlineData("/api/admin/wallets/adjustments", AdminRoles.Support)]
     [InlineData("/api/admin/features", AdminRoles.Accountant)]
-    [InlineData("/api/admin/members", AdminRoles.Verification)]
+    [InlineData("/api/admin/members", AdminRoles.Editor)]
     [InlineData("/api/admin/support/tickets", AdminRoles.Editor)]
-    [InlineData("/api/admin/reports/dashboard", AdminRoles.Verification)]
+    [InlineData("/api/admin/reports/dashboard", AdminRoles.Editor)]
     [InlineData("/api/admin/community/reported", AdminRoles.Moderator)]
     [InlineData("/api/admin/campaigns", AdminRoles.Accountant)]
     public async Task Admin_endpoints_enforce_permissions(string path, string role)
@@ -240,7 +213,7 @@ public class ValidationApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     }
 
     [Theory]
-    [InlineData("/api/admin/escrow/payouts", AdminRoles.Accountant)]
+    [InlineData("/api/admin/wallets/adjustments", AdminRoles.Accountant)]
     [InlineData("/api/admin/members", AdminRoles.Moderator)]
     [InlineData("/api/admin/support/tickets", AdminRoles.Support)]
     [InlineData("/api/admin/reports/dashboard", AdminRoles.Marketing)]
@@ -327,5 +300,5 @@ public class ValidationApiTests(MongoFixture mongo) : ApiTestBase(mongo)
 
     [Fact]
     public async Task Public_feature_flags_are_readable() =>
-        Assert.True((await (await Anonymous().GetAsync("/api/features")).EnsureOk()).GetProperty("escrow").GetBoolean());
+        Assert.True((await (await Anonymous().GetAsync("/api/features")).EnsureOk()).GetProperty("community").GetBoolean());
 }

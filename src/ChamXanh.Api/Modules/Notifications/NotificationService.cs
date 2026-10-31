@@ -15,7 +15,7 @@ public class Notification
 {
     [BsonId, BsonRepresentation(BsonType.ObjectId)] public string Id { get; set; } = ObjectId.GenerateNewId().ToString();
     public string UserId { get; set; } = default!;
-    public string Type { get; set; } = default!; // vd: care.watering, escrow, community.comment
+    public string Type { get; set; } = default!; // vd: care.watering, plan, community.comment
     public string Title { get; set; } = default!;
     public string? Body { get; set; }
     public string? Link { get; set; }
@@ -48,7 +48,7 @@ public static class NotificationGroups
 
     public static string Of(string type) => type.Split('.')[0] switch
     {
-        "escrow" or "wallet" or "garden" or "plan" => Transaction,
+        "wallet" or "plan" => Transaction,
         "account" or "sanction" => Security,
         "chat" => Chat,
         "listing" => Listing,
@@ -109,7 +109,7 @@ public class NotificationService(IMongoDatabase db, TimeProvider clock, IHubCont
         return groups;
     }
 
-    /// <param name="phone">Truyền SĐT để gửi kèm SMS/ZNS (chỉ dùng cho bước quan trọng của đơn đảm bảo, cảnh báo tài khoản).</param>
+    /// <param name="phone">Truyền SĐT để gửi kèm SMS/ZNS (chỉ dùng cho cảnh báo tài khoản).</param>
     public async Task<Notification> SendAsync(string userId, string type, string title, string? body, string? link, CancellationToken ct, string? phone = null)
     {
         var now = clock.GetUtcNow().UtcDateTime;

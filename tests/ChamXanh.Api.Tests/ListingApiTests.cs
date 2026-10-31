@@ -16,7 +16,6 @@ public class ListingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     protected override void ConfigureSettings(IWebHostBuilder b)
     {
         b.UseSetting("Listings:RandomAuditRate", "0");
-        b.UseSetting("Listings:ProSellerThreshold", "2");
     }
 
     int _imageSeed;
@@ -172,9 +171,8 @@ public class ListingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
         Assert.Equal(HttpStatusCode.NotFound, (await Anonymous().GetAsync("/api/listings/" + l.GetProperty("id").GetString())).StatusCode);
 
         // 10 điểm → khóa 30 ngày (BR-MOD-04): đăng nhập lại bị chặn
-        var phone = (await (await c.GetAsync("/api/me")).EnsureOk()).GetProperty("phone").GetString();
-        var otp = await (await Anonymous().PostAsJsonAsync("/api/auth/otp/request", new { phone })).EnsureOk();
-        var locked = await Anonymous().PostAsJsonAsync("/api/auth/otp/verify", new { phone, code = otp.GetProperty("devCode").GetString() });
+        var username = (await (await c.GetAsync("/api/me")).EnsureOk()).GetProperty("username").GetString();
+        var locked = await Anonymous().PostAsJsonAsync("/api/auth/login", new { username, password = "mat-khau-test-1" });
         Assert.Equal(HttpStatusCode.Forbidden, locked.StatusCode);
     }
 
@@ -317,13 +315,11 @@ public class ListingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     }
 
     [Fact]
-    public async Task Pro_seller_label_hidden_phone_and_radius_search()
+    public async Task Hidden_phone_and_radius_search()
     {
         var (seller, sellerId) = await Member();
         var ids = new List<string>();
         for (var i = 0; i < 3; i++) ids.Add((await Create(seller, SenDa(await Photos(seller), title: $"Sen đá kim tuyến lô số {i + 1}"))).GetProperty("id").GetString()!);
-        var profile = await (await Anonymous().GetAsync($"/api/users/{sellerId}")).EnsureOk();
-        Assert.True(profile.GetProperty("flags").GetProperty("isProSeller").GetBoolean()); // ngưỡng test = 2
 
         var (buyer, _) = await Member();
         var phone = await (await buyer.GetAsync($"/api/listings/{ids[0]}/phone")).EnsureOk();
@@ -354,11 +350,11 @@ public class ListingApiTests(MongoFixture mongo) : ApiTestBase(mongo)
         Assert.All(res.Items, i => Assert.Contains("30cm", i.Title));
         Assert.NotEmpty(res.Items);
 
-        var kyc = await Upload(c, kind: "KycDocument");
-        Assert.Equal(HttpStatusCode.NotFound, (await Anonymous().GetAsync($"/media/{kyc}/card.webp")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/secure-media/{kyc}/card")).StatusCode);
+        var evidence = await Upload(c, kind: "DisputeEvidence");
+        Assert.Equal(HttpStatusCode.NotFound, (await Anonymous().GetAsync($"/media/{evidence}/card.webp")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/api/secure-media/{evidence}/card")).StatusCode);
         var (other, _) = await Member();
-        Assert.Equal(HttpStatusCode.Forbidden, (await other.GetAsync($"/api/secure-media/{kyc}/card")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await other.GetAsync($"/api/secure-media/{evidence}/card")).StatusCode);
     }
 
     [Fact]

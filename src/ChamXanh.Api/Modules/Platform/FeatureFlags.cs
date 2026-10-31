@@ -18,15 +18,14 @@ public class FeatureFlag
 
 public static class Flags
 {
-    public const string Escrow = "escrow";
     public const string Community = "community";
     public const string AiIdentify = "ai.identify";
     public const string ImageSearch = "search.image";
 
-    /// <summary>Mặc định khi chưa có bản ghi trong DB. Escrow tắt cho tới khi ký đối tác thanh toán (BR-ESC-05).</summary>
+    /// <summary>Mặc định khi chưa có bản ghi trong DB.</summary>
     public static readonly Dictionary<string, bool> Defaults = new()
     {
-        [Escrow] = false, [Community] = true, [AiIdentify] = true, [ImageSearch] = true,
+        [Community] = true, [AiIdentify] = true, [ImageSearch] = true,
     };
 }
 

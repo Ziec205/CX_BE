@@ -76,10 +76,9 @@ public static partial class ListingRules
         media.Count == 0 || media.Any(m => m.CapturedAt is null) ? null : media.Min(m => m.CapturedAt);
 
     /// <summary>BR-LST-12: nhãn "Bán chuyên" chỉ tính tin Bán + Cho thuê đang hiển thị, không áp khi đã có gói.</summary>
-    public static bool IsProSeller(long activeSellOrRent, bool hasActivePlan, int threshold) => !hasActivePlan && activeSellOrRent > threshold;
 
-    public static DateTime ComputeExpiry(DateTime now, ListingOptions o) =>
-        (o.LaunchDate is { } launch && now < launch ? launch : now).AddDays(o.ExpiryDays);
+    public static DateTime ComputeExpiry(DateTime now, ListingOptions o, int? days = null) =>
+        (o.LaunchDate is { } launch && now < launch ? launch : now).AddDays(days ?? o.ExpiryDays);
 
     public static bool IsPubliclyVisible(ListingStatus s) => s is ListingStatus.Active or ListingStatus.SoldOut;
 }

@@ -1,7 +1,6 @@
 using ChamXanh.Api.Common;
 using ChamXanh.Api.Modules.Community;
 using ChamXanh.Api.Modules.Deals;
-using ChamXanh.Api.Modules.Escrow;
 using ChamXanh.Api.Modules.Listings;
 using ChamXanh.Api.Modules.Messaging;
 using ChamXanh.Api.Modules.Notifications;
@@ -96,30 +95,23 @@ public class ReminderRecurrenceTests
     public void Reminder_labels(ReminderKind kind, string label) => Assert.Equal(label, ReminderSchedule.Label(kind));
 }
 
-public class EscrowMathTests
+public class ListingQuotaTests
 {
+    [Theory]
+    [InlineData(ChamXanh.Api.Modules.Plans.PlanCode.Free, 3, 10, 30)]
+    [InlineData(ChamXanh.Api.Modules.Plans.PlanCode.Plus, 30, 5, 60)]
+    [InlineData(ChamXanh.Api.Modules.Plans.PlanCode.Pro, 100, 5, 60)]
+    public void Plan_listing_quota_fee_and_days(ChamXanh.Api.Modules.Plans.PlanCode code, int perMonth, long extraXu, int days)
+    {
+        var p = ChamXanh.Api.Modules.Plans.PlanCatalog.Get(code);
+        Assert.Equal((perMonth, extraXu, days), (p.ListingsPerMonth, p.ExtraListingXu, p.ListingDays));
+    }
 
     [Theory]
-    [InlineData(1_000_000, 0, 40_000, 0, 960_000)]
-    [InlineData(1_000_000, 50_000, 40_000, 0, 1_010_000)]
-    [InlineData(1_000_000, 50_000, 40_000, 1_050_000, 0)]
-    [InlineData(1_000_000, 0, 40_000, 500_000, 480_000)]
-    [InlineData(100_000, 0, 5_000, 99_999, 0)] // giữ 1đ, phí làm tròn lên → không âm
-    [InlineData(200_000, 30_000, 8_000, 30_000, 192_000)]
-    public void Seller_payout(long items, long ship, long fee, long refund, long expected) =>
-        Assert.Equal(expected, EscrowService.SellerPayout(items, ship, fee, "SELLER", refund));
-
-    [Fact]
-    public void Buyer_paid_fee_is_not_deducted_from_seller() => Assert.Equal(1_000_000, EscrowService.SellerPayout(1_000_000, 0, 40_000, "BUYER", 0));
-
-    [Theory]
-    [InlineData(50_000, 5_000)]        // 4% = 2.000 → tối thiểu 5.000
-    [InlineData(1_000_000, 40_000)]
-    [InlineData(10_000_000, 400_000)]
-    [InlineData(100_000_000, 2_000_000)] // chạm trần 2 triệu
-    [InlineData(123_456, 5_000)]
-    [InlineData(1_234_567, 49_383)]    // làm tròn lên
-    public void Escrow_fee_4pct_with_min_max(long items, long fee) => Assert.Equal(fee, PriceCalculator.EscrowFee(new EscrowFee(), items));
+    [InlineData("2026-10-31T16:59:00Z", "2026-10")] // 23:59 ngày 31/10 giờ Việt Nam
+    [InlineData("2026-10-31T17:00:00Z", "2026-11")] // 0:00 ngày 1/11 giờ Việt Nam: sang tháng mới
+    public void Quota_month_follows_vietnam_time(string utc, string month) =>
+        Assert.Equal(month, ListingFeeService.MonthOf(DateTime.Parse(utc, null, System.Globalization.DateTimeStyles.AdjustToUniversal)));
 }
 
 public class DealsRulesTests
@@ -138,8 +130,8 @@ public class DealsRulesTests
 public class NotificationGroupTests
 {
     [Theory]
-    [InlineData("escrow", NotificationGroups.Transaction)]
-    [InlineData("escrow.created", NotificationGroups.Transaction)]
+    [InlineData("plan", NotificationGroups.Transaction)]
+    [InlineData("plan.expiring", NotificationGroups.Transaction)]
     [InlineData("wallet.topup", NotificationGroups.Transaction)]
     [InlineData("sanction", NotificationGroups.Security)]
     [InlineData("account.support", NotificationGroups.Security)]
@@ -166,18 +158,17 @@ public class TextAndFlagTests
     public void Slugify_vietnamese(string input, string slug) => Assert.Equal(slug, VietnameseText.Slugify(input));
 
     [Theory]
-    [InlineData(Flags.Escrow, false)]
     [InlineData(Flags.Community, true)]
     [InlineData(Flags.AiIdentify, true)]
     [InlineData(Flags.ImageSearch, true)]
     public void Feature_flag_defaults(string key, bool enabled) => Assert.Equal(enabled, Flags.Defaults[key]);
 
     [Theory]
-    [InlineData("Chuyển khoản trước cho mình nhé", false, false, false, true)]
-    [InlineData("Gửi mình mã OTP", false, false, false, true)]
-    [InlineData("Mai mình qua xem cây", false, false, false, false)]
-    [InlineData("Kết bạn zalo nhé", false, true, true, true)]
-    [InlineData("Kết bạn zalo nhé", false, false, false, false)]
-    public void Scam_detector_cases(string text, bool escrow, bool newAccount, bool firstMessage, bool warned) =>
-        Assert.Equal(warned, ScamDetector.Check(text, escrow, newAccount, firstMessage) is not null);
+    [InlineData("Chuyển khoản trước cho mình nhé", false, false, true)]
+    [InlineData("Gửi mình mã OTP", false, false, true)]
+    [InlineData("Mai mình qua xem cây", false, false, false)]
+    [InlineData("Kết bạn zalo nhé", true, true, true)]
+    [InlineData("Kết bạn zalo nhé", false, false, false)]
+    public void Scam_detector_cases(string text, bool newAccount, bool firstMessage, bool warned) =>
+        Assert.Equal(warned, ScamDetector.Check(text, newAccount, firstMessage) is not null);
 }

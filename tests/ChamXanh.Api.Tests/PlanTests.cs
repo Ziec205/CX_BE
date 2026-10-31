@@ -289,3 +289,14 @@ public class PayOsWebhookTests(MongoFixture mongo) : ApiTestBase(mongo)
         Assert.Equal((PlanPaymentStatus.Paid, "FT777001"), (stored.Status, stored.GatewayRef));
     }
 }
+
+public class AiTextTests
+{
+    [Theory]
+    [InlineData("Dòng 1\nDòng 2", "Dòng 1\nDòng 2")]
+    [InlineData("- Tưới ít\r\n- Để nơi sáng\n", "- Tưới ít\n- Để nơi sáng")]
+    [InlineData("Lá \\\"vàng mép\\\"", "Lá \"vàng mép\"")]
+    [InlineData("Đã đúng\nkhông đổi", "Đã đúng\nkhông đổi")]
+    public void Clean_turns_double_escaped_newlines_into_real_ones(string raw, string expected) =>
+        Assert.Equal(expected, ChamXanh.Api.Modules.Ai.AssistantService.Clean(raw));
+}

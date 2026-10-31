@@ -74,8 +74,12 @@ public class ListingRulesTests
     }
 
     [Fact]
-    public void Pro_seller_only_without_plan() =>
-        Assert.Equal((true, false), (ListingRules.IsProSeller(21, false, 20), ListingRules.IsProSeller(21, true, 20)));
+    public void Expiry_uses_days_of_plan_at_posting()
+    {
+        var now = new DateTime(2027, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+        Assert.Equal(now.AddDays(30), ListingRules.ComputeExpiry(now, new ListingOptions(), 30));
+        Assert.Equal(now.AddDays(60), ListingRules.ComputeExpiry(now, new ListingOptions()));
+    }
 
     [Fact]
     public void Attribute_validation()
@@ -138,8 +142,8 @@ public class ListingRulesTests
     }
 
     static RiskContext Ctx(string title = "Sen đá kim tuyến chậu nhỏ", string desc = "Cây khỏe mạnh, lên màu đẹp", Category? cat = null,
-        Species? sp = null, long? price = 100_000, bool newAcc = false, bool individual = true, bool trusted = false, Dictionary<string, object>? attrs = null) =>
-        new(title, desc, cat ?? SenDa, sp, attrs ?? [], price, null, newAcc, individual, trusted, 0, false, 5_000_000, 50_000_000);
+        Species? sp = null, long? price = 100_000, bool newAcc = false, Dictionary<string, object>? attrs = null) =>
+        new(title, desc, cat ?? SenDa, sp, attrs ?? [], price, null, newAcc, 0, false, 5_000_000, 50_000_000);
 
     static RiskResult Eval(RiskContext c) => RiskScorer.Evaluate(c, new ModerationConfig(), 30, 70);
 
@@ -159,13 +163,13 @@ public class ListingRulesTests
         Assert.Equal(RiskRoute.Manual, Eval(Ctx(desc: "Cây vườn nhà trồng, không phải lan rừng tự nhiên")).Route);
 
     [Fact]
-    public void Restricted_items_always_manual_even_for_trusted_garden()
+    public void Restricted_items_always_manual()
     {
-        Assert.Equal(RiskRoute.Manual, Eval(Ctx(cat: PhanBon, trusted: true, individual: false)).Route);
+        Assert.Equal(RiskRoute.Manual, Eval(Ctx(cat: PhanBon)).Route);
         var lanHai = CatalogSeed.Species().First(s => s.Id == "lan-hai");
-        Assert.Equal(RiskRoute.Manual, Eval(Ctx(sp: lanHai, trusted: true, individual: false)).Route);
-        Assert.Equal(RiskRoute.Manual, Eval(Ctx(cat: Bonsai, attrs: new() { ["nguonGoc"] = "Phôi rừng" }, trusted: true)).Route);
-        Assert.Equal(RiskRoute.Manual, Eval(Ctx(price: 60_000_000, trusted: true, individual: false)).Route);
+        Assert.Equal(RiskRoute.Manual, Eval(Ctx(sp: lanHai)).Route);
+        Assert.Equal(RiskRoute.Manual, Eval(Ctx(cat: Bonsai, attrs: new() { ["nguonGoc"] = "Phôi rừng" })).Route);
+        Assert.Equal(RiskRoute.Manual, Eval(Ctx(price: 60_000_000)).Route);
     }
 
     [Fact]
@@ -188,11 +192,10 @@ public class ListingRulesTests
 public class CatalogSeedTests
 {
     [Fact]
-    public void Every_posting_category_has_a_price_group()
+    public void Every_posting_category_has_a_level_one_parent()
     {
-        var book = ChamXanh.Api.Modules.Pricing.PriceBookSeed.Create(DateTime.UtcNow);
-        var missing = CatalogSeed.Create().Where(c => c.Level == 2)
-            .Where(c => ChamXanh.Api.Modules.Pricing.PriceCalculator.ResolvePriceGroup(book, c.Id) is null).Select(c => c.Id).ToList();
-        Assert.Empty(missing);
+        var all = CatalogSeed.Create();
+        var roots = all.Where(c => c.Level == 1).Select(c => c.Id).ToHashSet();
+        Assert.All(all.Where(c => c.Level == 2), c => Assert.Contains(c.ParentId!, roots));
     }
 }

@@ -11,10 +11,10 @@ public record RegisterRequest(string Username, string Password, string ConfirmPa
 public record PasswordLoginRequest(string Username, string Password);
 public record AuthResponse(TokenPair Tokens, MeResponse User, bool IsNew);
 public record MeResponse(string Id, string? Phone, string? Username, string DisplayName, string? FullName, string? ProvinceId, string? WardId,
-    string? AvatarMediaId, bool HidePhone, UserFlags Flags, string Status, bool CanPost, DateTime CreatedAt, string? Email)
+    string? AvatarMediaId, bool HidePhone, string Status, bool CanPost, DateTime CreatedAt, string? Email)
 {
     public static MeResponse From(User u) => new(u.Id, u.Phone, u.Username, u.DisplayName, u.FullName, u.ProvinceId, u.WardId,
-        u.AvatarMediaId, u.HidePhone, u.Flags, u.Status.ToString(), u.HasPostingProfile, u.CreatedAt, u.Email);
+        u.AvatarMediaId, u.HidePhone, u.Status.ToString(), u.HasPostingProfile, u.CreatedAt, u.Email);
 }
 
 public static class IdentityEndpoints
@@ -40,23 +40,6 @@ public static class IdentityEndpoints
     {
         var auth = app.MapGroup("/api/auth").WithTags("Auth");
 
-        auth.MapPost("/otp/request", async (OtpRequest req, OtpService otp, CancellationToken ct) =>
-        {
-            var phone = PhoneNumber.Normalize(req.Phone);
-            var devCode = await otp.RequestAsync(phone, req.DeviceId, ct);
-            return Results.Ok(new { sent = true, devCode });
-        });
-
-        auth.MapPost("/otp/verify", async (OtpVerifyRequest req, OtpService otp, UserService users, TokenService tokens, CancellationToken ct) =>
-        {
-            var phone = PhoneNumber.Normalize(req.Phone);
-            await otp.VerifyAsync(phone, req.Code, ct);
-            var (user, isNew) = await users.GetOrCreateByPhoneAsync(phone, ct);
-            var pair = await tokens.IssueAsync(user.Id, Claims.Member, user.DisplayName);
-            return Results.Ok(new AuthResponse(pair, MeResponse.From(user), isNew));
-        });
-
-        // Thành viên thường: tên đăng nhập + mật khẩu. SĐT/CCCD chỉ cần khi mở Nhà vườn/Shop.
         auth.MapPost("/register", async (RegisterRequest req, HttpContext http, AuthOptions auth, UserService users, TokenService tokens, CancellationToken ct) =>
         {
             var user = await users.RegisterAsync(req.Username, req.Password, req.ConfirmPassword, ClientIp(http, auth), ct);
@@ -94,7 +77,7 @@ public static class IdentityEndpoints
         me.MapPut("/", async (UpdateProfileRequest req, ClaimsPrincipal p, UserService users, CancellationToken ct) =>
             MeResponse.From(await users.UpdateProfileAsync(p.UserId(), req, ct)));
 
-        // Gắn SĐT cho tài khoản tên đăng nhập (bắt buộc trước khi mở Nhà vườn/Shop).
+        // Gắn SĐT đã xác minh cho tài khoản (không bắt buộc), để người mua bấm "Hiện số điện thoại".
         me.MapPost("/phone/request", async (OtpRequest req, OtpService otp, CancellationToken ct) =>
         {
             var phone = PhoneNumber.Normalize(req.Phone);
@@ -116,7 +99,7 @@ public static class IdentityEndpoints
                 try { var phone = PhoneNumber.Normalize(q); u = await users.Users.Find(x => x.Phone == phone).FirstOrDefaultAsync(ct); }
                 catch (Common.DomainException) { }
             }
-            return u is null ? Results.NotFound() : Results.Ok(new { u.Id, u.Phone, u.DisplayName, u.FullName, u.Flags, Status = u.Status.ToString(), u.ActiveViolationPoints, u.CreatedAt });
+            return u is null ? Results.NotFound() : Results.Ok(new { u.Id, u.Phone, u.DisplayName, u.FullName, Status = u.Status.ToString(), u.ActiveViolationPoints, u.CreatedAt });
         }).WithTags("Admin Users").RequireAuthorization(p => p
             .RequireClaim(Claims.Kind, Claims.Admin).RequireClaim(Claims.Mfa, "true")
             .RequireClaim(Claims.Perm, Perm.WalletAdjust, Perm.UserSanction, Perm.ListingModerate, Perm.DisputeResolve));

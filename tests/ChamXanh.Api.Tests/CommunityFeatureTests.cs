@@ -17,16 +17,15 @@ namespace ChamXanh.Api.Tests;
 public class ScamDetectorTests
 {
     [Theory]
-    [InlineData("Bạn chuyển cọc trước 500k mình giữ cây nhé", false, true)]
-    [InlineData("Đọc giúp mình mã OTP vừa gửi về máy", true, true)]
-    [InlineData("Cây còn không bạn, mai mình qua xem", false, false)]
-    [InlineData("Bạn chuyển cọc trước nhé", true, false)] // tin có Giao dịch đảm bảo: không cảnh báo cọc
-    public void Detects_scam_patterns(string text, bool escrow, bool warned) =>
-        Assert.Equal(warned, ScamDetector.Check(text, escrow, false, false) is not null);
+    [InlineData("Bạn chuyển cọc trước 500k mình giữ cây nhé", true)]
+    [InlineData("Đọc giúp mình mã OTP vừa gửi về máy", true)]
+    [InlineData("Cây còn không bạn, mai mình qua xem", false)]
+    public void Detects_scam_patterns(string text, bool warned) =>
+        Assert.Equal(warned, ScamDetector.Check(text, false, false) is not null);
 
     [Fact]
     public void New_account_moving_off_platform_on_first_message() =>
-        Assert.NotNull(ScamDetector.Check("Kết bạn zalo mình trao đổi nhé", false, senderIsNewAccount: true, isFirstMessageFromSender: true));
+        Assert.NotNull(ScamDetector.Check("Kết bạn zalo mình trao đổi nhé", senderIsNewAccount: true, isFirstMessageFromSender: true));
 
     [Fact]
     public void Weighted_score_needs_three_reviews()
@@ -62,7 +61,7 @@ public class CommunityFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
         return (await (await c.PostAsync("/api/media", form)).EnsureOk()).GetProperty("id").GetString()!;
     }
 
-    async Task<string> Listing(HttpClient c, bool escrow = false, string type = "Sell")
+    async Task<string> Listing(HttpClient c, string type = "Sell")
     {
         var media = new List<string> { await Upload(c), await Upload(c), await Upload(c) };
         var l = await (await c.PostAsJsonAsync("/api/listings", new
@@ -72,7 +71,7 @@ public class CommunityFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
                 type, categoryId = "noi-that", speciesId = "trau-ba", title = "Trầu bà leo cột cao 1m2", description = "Cây khỏe, lá xanh, leo cột dừa, hợp phòng khách",
                 price = type == "Buy" ? (long?)null : 350_000, budgetMax = type == "Buy" ? 400_000 : (long?)null,
                 attributes = new { tinhTrang = "Trồng chậu", chieuCao = 120 }, mediaIds = type == "Buy" ? new List<string>() : media,
-                escrowEnabled = escrow, lat = 10.03, lng = 105.78,
+                lat = 10.03, lng = 105.78,
             },
             submit = true,
         })).EnsureOk();
@@ -165,83 +164,10 @@ public class CommunityFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
     {
         var (buyer, buyerId) = await Member();
         var requestId = await Listing(buyer, type: "Buy");
-        var (garden, gardenId) = await Member();
-        var conv = await (await garden.PostAsJsonAsync("/api/conversations", new { listingId = requestId })).EnsureOk();
+        var (quoter, quoterId) = await Member();
+        var conv = await (await quoter.PostAsJsonAsync("/api/conversations", new { listingId = requestId })).EnsureOk();
         Assert.Equal(buyerId, conv.GetProperty("buyerId").GetString());
-        Assert.Equal(gardenId, conv.GetProperty("sellerId").GetString());
-    }
-
-    object Application(List<string> photos, List<string> docs, string idNumber, string name = "Nguyễn Văn Tư", string bankName = "NGUYEN VAN TU") => new
-    {
-        name = "Vườn kiểng Tư Chợ Lách", type = "Garden", description = "Chuyên mai vàng, bonsai", address = "Ấp Phú Hòa, xã Chợ Lách",
-        provinceId = "86", lat = 10.26, lng = 106.13, openingHours = "7h-17h", allowVisit = true, photoMediaIds = photos,
-        method = "VideoCall", idNumber, fullName = name, dateOfBirth = "1980-05-12", documentMediaIds = docs,
-        bankCode = "VCB", bankAccountNo = "0123456789", bankAccountName = bankName,
-    };
-
-    [Fact]
-    public async Task Garden_verification_plan_purchase_escrow_and_map()
-    {
-        var (owner, ownerId) = await Member();
-        var photos = new List<string> { await Upload(owner), await Upload(owner) };
-        var docs = new List<string> { await Upload(owner, "KycDocument"), await Upload(owner, "KycDocument") };
-
-        Assert.Equal("VALIDATION_FAILED", await (await owner.PostAsJsonAsync("/api/garden/application", Application(photos, docs, "079080001234", bankName: "TRAN THI B"))).ErrorCode());
-        Assert.Equal("INVALID_MEDIA", await (await owner.PostAsJsonAsync("/api/garden/application", Application(photos, photos, "079080001234"))).ErrorCode());
-        var applied = await (await owner.PostAsJsonAsync("/api/garden/application", Application(photos, docs, "079080001234"))).EnsureOk();
-        Assert.Equal("Submitted", applied.GetProperty("status").GetString());
-        Assert.Equal("••••••6789", applied.GetProperty("bank").GetProperty("accountNoMasked").GetString());
-
-        // Chưa xác minh: không bật được Giao dịch đảm bảo
-        Assert.Equal("VALIDATION_FAILED", await (await owner.PostAsJsonAsync("/api/listings", new
-        {
-            listing = new { type = "Sell", categoryId = "chau", title = "Chậu xi măng tròn 40cm", description = "Chậu đúc dày, có lỗ thoát nước", price = 150_000,
-                attributes = new { chatLieu = "Xi măng", dkMieng = 40 }, mediaIds = new[] { await Upload(owner) }, escrowEnabled = true },
-        })).ErrorCode());
-
-        // Cùng CCCD cho hồ sơ khác → chặn (BR-AUTH-02)
-        var (other, _) = await Member();
-        var otherPhotos = new List<string> { await Upload(other), await Upload(other) };
-        var otherDocs = new List<string> { await Upload(other, "KycDocument"), await Upload(other, "KycDocument") };
-        Assert.Equal("CCCD_ALREADY_USED", await (await other.PostAsJsonAsync("/api/garden/application", Application(otherPhotos, otherDocs, "079080001234"))).ErrorCode());
-
-        var verifier = await Admin("verify.a", AdminRoles.Verification);
-        var queue = await (await verifier.GetAsync("/api/admin/gardens")).EnsureOk();
-        var gardenId = queue.EnumerateArray().First(g => g.GetProperty("profile").GetProperty("ownerId").GetString() == ownerId).GetProperty("profile").GetProperty("id").GetString();
-        var kyc = await (await verifier.GetAsync($"/api/admin/gardens/{gardenId}/kyc")).EnsureOk();
-        Assert.Equal("079080001234", kyc.GetProperty("idNumber").GetString());
-        Assert.Equal(HttpStatusCode.Forbidden, (await (await Admin("mod.x", AdminRoles.Moderator)).GetAsync($"/api/admin/gardens/{gardenId}/kyc")).StatusCode);
-        (await verifier.PostAsJsonAsync($"/api/admin/gardens/{gardenId}/review", new { decision = "Approve" })).EnsureSuccessStatusCode();
-
-        var me = await (await owner.GetAsync("/api/me")).EnsureOk();
-        Assert.True(me.GetProperty("flags").GetProperty("hasVerifiedGarden").GetBoolean());
-        Assert.False(me.GetProperty("flags").GetProperty("hasActivePlan").GetBoolean());
-        var escrowListing = await Listing(owner, escrow: true); // đã xác minh: bật được, chưa cần gói (sửa L31)
-
-        // Mua gói 1 tháng = 199 Xu
-        var tu = await (await owner.PostAsJsonAsync("/api/wallet/topups", new { packageCode = "CAY", expectedPriceBookVersion = 1 })).EnsureOk();
-        var raw = JsonSerializer.Serialize(new { topUpId = tu.GetProperty("id").GetString(), status = "PAID", amountVnd = 200_000, gatewayRef = "GW-garden" }, JsonSerializerOptions.Web);
-        var req = new HttpRequestMessage(HttpMethod.Post, "/api/payments/webhook") { Content = new StringContent(raw, Encoding.UTF8, "application/json") };
-        req.Headers.Add("X-Signature", TopUpService.Sign("dev-webhook-secret", raw));
-        (await Anonymous().SendAsync(req)).EnsureSuccessStatusCode();
-        Assert.Equal("PRICE_CHANGED", await (await owner.PostAsJsonAsync("/api/garden/plan", new { months = 1, expectedPriceBookVersion = 1, expectedPriceXu = 100, idempotencyKey = "p1" })).ErrorCode());
-        var plan = await (await owner.PostAsJsonAsync("/api/garden/plan", new { months = 1, expectedPriceBookVersion = 1, expectedPriceXu = 199, idempotencyKey = "p1" })).EnsureOk();
-        Assert.True(plan.GetProperty("profile").GetProperty("tick").GetBoolean());
-
-        var slug = plan.GetProperty("profile").GetProperty("slug").GetString();
-        Assert.Equal("vuon-kieng-tu-cho-lach", slug);
-        Assert.Equal(HttpStatusCode.OK, (await Anonymous().GetAsync($"/api/gardens/{slug}")).StatusCode);
-        var map = await (await Anonymous().GetAsync("/api/gardens/map?lat=10.25&lng=106.12&radiusKm=10&speciesId=trau-ba")).EnsureOk();
-        Assert.Contains(map.EnumerateArray(), g => g.GetProperty("slug").GetString() == slug);
-        var mapOtherSpecies = await (await Anonymous().GetAsync("/api/gardens/map?lat=10.25&lng=106.12&radiusKm=10&speciesId=mai-vang")).EnsureOk();
-        Assert.Empty(mapOtherSpecies.EnumerateArray());
-
-        // Đổi vị trí → phải xác minh lại, escrow bị tắt (BR-MAP-06)
-        (await owner.PutAsJsonAsync("/api/garden", new { lat = 10.30, lng = 106.20 })).EnsureSuccessStatusCode();
-        var after = await (await owner.GetAsync("/api/me")).EnsureOk();
-        Assert.False(after.GetProperty("flags").GetProperty("hasVerifiedGarden").GetBoolean());
-        var detail = await (await Anonymous().GetAsync($"/api/listings/{escrowListing}")).EnsureOk();
-        Assert.False(detail.GetProperty("card").GetProperty("escrow").GetBoolean());
+        Assert.Equal(quoterId, conv.GetProperty("sellerId").GetString());
     }
 
     [Fact]

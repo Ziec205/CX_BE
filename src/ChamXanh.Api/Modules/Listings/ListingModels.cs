@@ -15,11 +15,10 @@ public enum RentUnit { Day, Week, Month, TetSeason }
 
 public class ListingOptions
 {
+    /// <summary>Hạn mặc định cho tin cũ chưa ghi số ngày; tin mới lấy số ngày theo gói lúc đăng (Miễn phí 30, Plus/Pro 60).</summary>
     public int ExpiryDays { get; set; } = 60;                         // A-01
-    public int ProSellerThreshold { get; set; } = 20;                 // A-04
     public DateTime? LaunchDate { get; set; }                         // BR-LST-02: tin seed tính hạn từ ngày ra mắt
     public int MaxNewPerHour { get; set; } = 30;                      // BR-LST-01
-    public int MaxNewPerHourGarden { get; set; } = 100;
     public int MaxActiveGive { get; set; } = 10;                      // BR-GIV-02
     public long VerificationPhotoThresholdVnd { get; set; } = 20_000_000; // BR-LST-10
     public long ManualReviewPriceVnd { get; set; } = 50_000_000;
@@ -111,7 +110,6 @@ public class Listing
     public string? WardId { get; set; }
     public GeoJsonPoint<GeoJson2DGeographicCoordinates>? Location { get; set; }
     public List<string> PickupOptions { get; set; } = [];
-    public bool EscrowEnabled { get; set; }
 
     public List<ListingMediaRef> Media { get; set; } = [];
     public string? VerificationMediaId { get; set; }
@@ -120,15 +118,15 @@ public class Listing
     public int RiskScore { get; set; }
     public string? RejectReason { get; set; }
     public bool AppealUsed { get; set; }
-    public bool SellerHasActivePlan { get; set; }
+    /// <summary>Số lượt đăng đã tính phí/hạn mức cho tin (lần đăng đầu = 1, mỗi lần gia hạn +1).</summary>
+    public int ChargedCycles { get; set; }
+    /// <summary>Số ngày hiển thị theo gói ở lượt đăng gần nhất.</summary>
+    public int ListingDays { get; set; }
 
     public DateTime? FirstPublishedAt { get; set; }
-    /// <summary>Chỉ đổi khi hiển thị lần đầu và khi đẩy tin trả phí (BR-LST-15).</summary>
+    /// <summary>Chỉ đặt khi hiển thị lần đầu (BR-LST-15): sắp xếp "mới đăng" không bị đẩy lên bằng cách sửa hay gia hạn.</summary>
     public DateTime? BumpedAt { get; set; }
     public DateTime? ExpiresAt { get; set; }
-    public DateTime? PriorityUntil { get; set; }
-    public string? HighlightLabel { get; set; }
-    public DateTime? HighlightUntil { get; set; }
     public int Views { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

@@ -76,8 +76,8 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
     const string ChatSystem = """
         Bạn là "Trợ lý Chạm Xanh", trợ lý AI của Chạm Xanh — sàn mua bán, trao đổi cây trồng ở Việt Nam.
         Phạm vi: cây cảnh, bonsai, lan, hoa, cây ăn quả, rau, cây giống; chăm sóc, tưới, bón phân, đất và giá thể, chậu, sâu bệnh;
-        nhận biết cây; mua bán, định giá, đóng gói, vận chuyển cây; kinh nghiệm cho nhà vườn bán cây; cách dùng các tính năng của Chạm Xanh
-        (Chợ cây, Khám phá, Hồ sơ vườn, Nhắc lịch tưới, Cộng đồng, Giao dịch đảm bảo).
+        nhận biết cây; mua bán, định giá, đóng gói, vận chuyển cây; kinh nghiệm bán cây; cách dùng các tính năng của Chạm Xanh
+        (Chợ cây, Khám phá, Hồ sơ vườn, Nhắc lịch tưới, Cộng đồng, gói Xanh Plus/Pro, ví Xu).
         Câu hỏi nằm ngoài phạm vi trên (lập trình, chính trị, bài tập, giải trí...): đặt onTopic=false, answer là 1–2 câu từ chối nhẹ nhàng và mời hỏi về cây.
         Chào hỏi xã giao hoặc cảm ơn vẫn là onTopic=true.
         Cách trả lời: tiếng Việt, thân thiện, ngắn gọn, thực tế với khí hậu từng miền Việt Nam. Dùng gạch đầu dòng "- " khi liệt kê, **in đậm** ý chính, không dùng bảng, không dùng tiêu đề #.
@@ -162,7 +162,7 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
     const string CompareSystem = """
         Bạn là chuyên gia cây cảnh giúp người mua trên Chạm Xanh so sánh các tin đang bán. Dữ liệu mỗi tin ở dạng JSON, ảnh đính kèm theo đúng thứ tự tin.
         Đánh giá theo: giá so với kích thước/tình trạng, độ khỏe và dáng cây nhìn từ ảnh, độ đầy đủ của thông tin, độ tin cậy người bán
-        (nhà vườn đã xác minh, có Giao dịch đảm bảo, ảnh chụp thật trong app), khoảng cách nếu có.
+        (ảnh chụp thật trong app, mô tả đầy đủ), khoảng cách nếu có.
         Chỉ dựa vào dữ liệu được cung cấp, không bịa. Thiếu thông tin thì nói rõ là thiếu. Tiếng Việt, ngắn gọn.
         recommendedId: id tin nên chọn nhất (hoặc chuỗi rỗng nếu không thể kết luận). valueScore: 1–10 (đáng tiền). verdict: 2–4 câu kết luận.
         tips: 2–4 lưu ý khi hỏi người bán hoặc khi nhận cây.
@@ -197,7 +197,7 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
             verdict = "Chế độ thử: đây là kết quả mẫu vì chưa nối Gemini. Khi có khóa API, AI sẽ đối chiếu giá, kích thước, tình trạng và ảnh của từng tin.",
             recommendedId = items[0].Id,
             items = items.Select(l => new { listingId = l.Id, highlights = new[] { "Có ảnh và giá rõ ràng" }, concerns = new[] { "Kết quả mẫu, chưa phân tích thật" }, valueScore = 7 }),
-            tips = new[] { "Hỏi người bán ảnh/video cây hiện tại", "Ưu tiên Giao dịch đảm bảo khi trả trước" },
+            tips = new[] { "Hỏi người bán ảnh/video cây hiện tại", "Xem cây tận mắt hoặc nhận cây rồi mới trả tiền" },
         });
         var prompt = new AiPrompt(CompareSystem, [new AiTurn(true, "So sánh các tin sau:\n" + Json(facts), images)], CompareSchema, 0.3, simulated);
         var (doc, used) = await RunAsync(userId, prompt, ct);
@@ -229,14 +229,14 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
         return new { listingId = id, highlights = new List<string>(), concerns = new List<string>(), valueScore = (int?)null };
     }
 
-    // ---------------- Công cụ nhà vườn (Pro) ----------------
+    // ---------------- Công cụ người bán (Pro) ----------------
 
     const string MarketSystem = """
         Bạn là chuyên gia định giá cây trên Chạm Xanh. Người bán muốn biết tin của mình so với các tin tương tự đang bán trên chợ.
         Dữ liệu: tin của người bán, danh sách tin tương tự (JSON) và thống kê giá. Chỉ dựa vào dữ liệu; nếu ít hơn 3 tin tương tự thì nói rõ dữ liệu còn mỏng.
         position: một trong "Thấp hơn chợ", "Ngang chợ", "Cao hơn chợ", "Chưa đủ dữ liệu". summary: 2–4 câu.
         suggestedMin/suggestedMax: khoảng giá bán hợp lý (VND, số nguyên, làm tròn nghìn); 0 nếu không đủ dữ liệu.
-        suggestions: 3–5 gợi ý cụ thể để tin hấp dẫn và bán nhanh hơn (ảnh, mô tả, thông tin còn thiếu, giao dịch đảm bảo...).
+        suggestions: 3–5 gợi ý cụ thể để tin hấp dẫn và bán nhanh hơn (ảnh, mô tả, thông tin còn thiếu, giá...).
         """;
 
     static readonly JsonObject MarketSchema = Obj(new()
@@ -261,7 +261,7 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
             position = stats is null ? "Chưa đủ dữ liệu" : "Ngang chợ",
             summary = "Chế độ thử: kết quả mẫu vì chưa nối Gemini. Thống kê giá bên dưới là số liệu thật từ các tin tương tự trên chợ.",
             suggestedMin = stats?.Min ?? 0, suggestedMax = stats?.Max ?? 0,
-            suggestions = new[] { "Thêm ảnh chụp toàn cây và cận lá", "Ghi rõ chiều cao, tình trạng chậu/bầu", "Bật Giao dịch đảm bảo để người mua yên tâm" },
+            suggestions = new[] { "Thêm ảnh chụp toàn cây và cận lá", "Ghi rõ chiều cao, tình trạng chậu/bầu", "Ghi rõ cách giao nhận để người mua yên tâm" },
         });
         var (doc, used) = await RunAsync(userId, new AiPrompt(MarketSystem, [new AiTurn(true, input, await ListingImagesAsync([own], ct))], MarketSchema, 0.3, simulated), ct);
         var now = Now;
@@ -325,7 +325,7 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
     }
 
     const string DraftSystem = """
-        Bạn giúp nhà vườn viết tin bán cây trên Chạm Xanh từ ảnh và ghi chú. Nhìn ảnh để nhận ra loại cây, dáng, kích thước tương đối, tình trạng.
+        Bạn giúp người bán viết tin bán cây trên Chạm Xanh từ ảnh và ghi chú. Nhìn ảnh để nhận ra loại cây, dáng, kích thước tương đối, tình trạng.
         Không bịa thông tin không thấy được (tuổi cây, nguồn gốc, giá); những thứ chưa rõ thì để người bán tự điền.
         title: 10–70 ký tự, có tên cây và điểm nổi bật, không viết hoa toàn bộ, không emoji, không số điện thoại.
         description: 300–900 ký tự, tiếng Việt tự nhiên, chia đoạn ngắn: mô tả cây, tình trạng, cách chăm cơ bản, hình thức giao nhận.
@@ -435,8 +435,7 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
             id = l.Id, title = l.Title, category, price = l.Price, negotiable = l.PriceNegotiable || l.PriceMode == PriceMode.Negotiable,
             attributes = l.Attributes.ToDictionary(kv => kv.Key, kv => kv.Value is string s ? s : kv.Value is System.Collections.IEnumerable list ? string.Join(", ", list.Cast<object>()) : kv.Value?.ToString()),
             description = Shorten(l.Description, 600), photos = l.Media.Count,
-            realPhotos = l.Media.Count(m => m.CapturedInApp), escrow = l.EscrowEnabled, available = l.Available, unit = l.Unit,
-            seller = new { verifiedGarden = seller.IsVerifiedGarden, garden = seller.IsGarden, proSeller = seller.IsProSeller },
+            realPhotos = l.Media.Count(m => m.CapturedInApp), available = l.Available, unit = l.Unit, seller = seller.DisplayName,
             postedDaysAgo = l.FirstPublishedAt is { } at ? (int)(Now - at).TotalDays : (int?)null,
         };
     }
@@ -497,7 +496,11 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
     });
 
     static string Str(JsonDocument d, string key) =>
-        d.RootElement.ValueKind == JsonValueKind.Object && d.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim() : "";
+        d.RootElement.ValueKind == JsonValueKind.Object && d.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? Clean(v.GetString()!) : "";
+
+    /// <summary>Gemini ở chế độ JSON đôi khi thoát ký tự 2 lần: chuỗi chứa chữ "\n" thay vì dấu xuống dòng thật.</summary>
+    public static string Clean(string s) =>
+        s.Replace("\\r\\n", "\n").Replace("\\n", "\n").Replace("\\t", " ").Replace("\\\"", "\"").Replace("\r\n", "\n").Trim();
     static bool Bool(JsonDocument d, string key, bool fallback) =>
         d.RootElement.ValueKind == JsonValueKind.Object && d.RootElement.TryGetProperty(key, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False ? v.GetBoolean() : fallback;
     static long Long(JsonDocument d, string key) =>
@@ -505,7 +508,7 @@ public class AssistantService(IMongoDatabase db, IAiModel model, AiQuotaService 
             ? (v.TryGetInt64(out var n) ? n : (long)v.GetDouble()) : 0;
     static List<string> StrArray(JsonElement e, string key) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Array
-            ? v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!.Trim()).Where(x => x.Length > 0).Take(8).ToList()
+            ? v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => Clean(x.GetString()!)).Where(x => x.Length > 0).Take(8).ToList()
             : [];
 
     static JsonObject T(string type) => new() { ["type"] = type };

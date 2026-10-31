@@ -96,8 +96,7 @@ public static partial class CommunityRules
     public static string Badge(int points) => points switch { >= 1000 => "Cổ thụ", >= 300 => "Cây", >= 50 => "Chồi", _ => "Mầm" };
 }
 
-public class CommunityService(IMongoDatabase db, TimeProvider clock, UserService users, MediaService media, NotificationService notifications,
-    Gardens.GardenService gardens)
+public class CommunityService(IMongoDatabase db, TimeProvider clock, UserService users, MediaService media, NotificationService notifications)
 {
     public IMongoCollection<Post> Posts { get; } = db.GetCollection<Post>("communityPosts");
     public IMongoCollection<Comment> Comments { get; } = db.GetCollection<Comment>("communityComments");
@@ -284,17 +283,13 @@ public class CommunityService(IMongoDatabase db, TimeProvider clock, UserService
         var list = ids.Distinct().ToList();
         var us = await users.Users.Find(u => list.Contains(u.Id)).ToListAsync(ct);
         var profiles = (await Profiles.Find(p => list.Contains(p.UserId)).ToListAsync(ct)).ToDictionary(p => p.UserId);
-        var gardenList = await gardens.Gardens.Find(g => list.Contains(g.OwnerId)).ToListAsync(ct);
         return us.ToDictionary(u => u.Id, u =>
         {
             var p = profiles.GetValueOrDefault(u.Id);
-            var g = gardenList.FirstOrDefault(x => x.OwnerId == u.Id);
-            // BR-COM-05: nhà vườn có gói còn hạn hiện liên kết gian hàng dưới tên.
             return (object)new
             {
                 u.Id, name = u.Status == UserStatus.Deleted ? "Người dùng đã xóa" : u.DisplayName, u.AvatarMediaId,
                 points = p?.Points ?? 0, badge = CommunityRules.Badge(p?.Points ?? 0), expert = p?.Expert == true, p?.ExpertTitle,
-                gardenSlug = u.Flags.HasActivePlan ? g?.Slug : null, verified = u.Flags.HasVerifiedGarden,
             };
         });
     }

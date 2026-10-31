@@ -13,7 +13,7 @@ public static class PlanEndpoints
     static object PlanDto(PlanDefinition p) => new
     {
         code = p.Code.ToString(), p.Name, p.Tagline, p.MonthlyVnd, p.YearlyVnd,
-        p.GardenPlants, p.AiPerDay, p.MarketCompare, p.SellerAi,
+        p.GardenPlants, p.AiPerDay, p.MarketCompare, p.SellerAi, p.ListingsPerMonth, p.ExtraListingXu, p.ListingDays,
     };
 
     static object PaymentDto(PlanPayment p) => new
