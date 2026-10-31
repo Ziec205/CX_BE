@@ -37,7 +37,8 @@ public class PayOsOptions
 }
 
 public record PaymentLinkRequest(long OrderCode, long Amount, string Description, string ItemName, string ReturnUrl, string CancelUrl, DateTime ExpiresAt, string WebBase);
-public record PaymentLink(string? PaymentLinkId, string CheckoutUrl);
+/// <param name="QrCode">Chuỗi VietQR do PayOS trả về, app/web tự vẽ thành mã QR để quét bằng app ngân hàng.</param>
+public record PaymentLink(string? PaymentLinkId, string CheckoutUrl, string? QrCode = null);
 public enum GatewayState { Pending, Paid, Cancelled, Expired }
 public record GatewayStatus(GatewayState State, long AmountPaid, string? Reference);
 
@@ -117,7 +118,8 @@ public class PayOsGateway(HttpClient http, PayOsOptions options) : IPlanPaymentG
         });
         using var res = await http.SendAsync(req, ct);
         var data = await DataAsync(res, ct);
-        return new(data.GetProperty("paymentLinkId").GetString(), data.GetProperty("checkoutUrl").GetString()!);
+        var qr = data.TryGetProperty("qrCode", out var q) && q.ValueKind == JsonValueKind.String ? q.GetString() : null;
+        return new(data.GetProperty("paymentLinkId").GetString(), data.GetProperty("checkoutUrl").GetString()!, qr);
     }
 
     public async Task<GatewayStatus?> GetAsync(long orderCode, CancellationToken ct)
@@ -158,9 +160,30 @@ public class SimulatedPlanGateway(PayOsOptions options) : IPlanPaymentGateway
     {
         if (!options.AllowSimulator)
             throw new DomainException("PAYMENT_NOT_CONFIGURED", "Thanh toán chưa được cấu hình, vui lòng thử lại sau", StatusCodes.Status503ServiceUnavailable);
-        return Task.FromResult(new PaymentLink(null, $"{req.WebBase}/goi/gia-lap?ma={req.OrderCode}"));
+        return Task.FromResult(new PaymentLink(null, $"{req.WebBase}/goi/gia-lap?ma={req.OrderCode}", FakeVietQr(req)));
     }
 
     public Task<GatewayStatus?> GetAsync(long orderCode, CancellationToken ct) => Task.FromResult<GatewayStatus?>(null);
     public Task CancelAsync(long orderCode, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>Chuỗi theo khuôn VietQR (EMVCo) với tài khoản thử nghiệm, chỉ để hiển thị mã QR khi giả lập — quét sẽ không chuyển tiền thật.</summary>
+    public static string FakeVietQr(PaymentLinkRequest req)
+    {
+        static string F(string id, string v) => $"{id}{v.Length:00}{v}";
+        var merchant = F("00", "A000000727") + F("01", F("00", "970422") + F("01", "0000000000")) + F("02", "QRIBFTTA");
+        var body = F("00", "01") + F("01", "12") + F("38", merchant) + F("53", "704") + F("54", req.Amount.ToString())
+            + F("58", "VN") + F("62", F("08", req.Description)) + "6304";
+        return body + Crc16(body).ToString("X4");
+    }
+
+    static ushort Crc16(string s)
+    {
+        ushort crc = 0xFFFF;
+        foreach (var b in Encoding.UTF8.GetBytes(s))
+        {
+            crc ^= (ushort)(b << 8);
+            for (var i = 0; i < 8; i++) crc = (crc & 0x8000) != 0 ? (ushort)((crc << 1) ^ 0x1021) : (ushort)(crc << 1);
+        }
+        return crc;
+    }
 }

@@ -88,6 +88,8 @@ public class PlanPayment
     public string Gateway { get; set; } = default!;
     public string? PaymentLinkId { get; set; }
     public string? CheckoutUrl { get; set; }
+    /// <summary>Chuỗi VietQR của link PayOS (app hiện mã QR ngay trong ứng dụng).</summary>
+    public string? QrCode { get; set; }
     [BsonRepresentation(BsonType.String)] public PlanPaymentStatus Status { get; set; } = PlanPaymentStatus.Pending;
     public string? GatewayRef { get; set; }
     public DateTime CreatedAt { get; set; }

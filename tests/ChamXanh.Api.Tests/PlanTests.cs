@@ -83,6 +83,7 @@ public class PlanApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     {
         var pay = await (await c.PostAsJsonAsync("/api/plans/checkout", new { plan, months })).EnsureOk();
         Assert.Contains("/goi/gia-lap?ma=", pay.GetProperty("checkoutUrl").GetString());
+        Assert.StartsWith("000201", pay.GetProperty("qrCode").GetString()); // giả lập vẫn trả chuỗi VietQR để app hiện mã QR
         return await (await c.PostAsync($"/api/plans/payments/{pay.GetProperty("id").GetString()}/simulate", null)).EnsureOk();
     }
 

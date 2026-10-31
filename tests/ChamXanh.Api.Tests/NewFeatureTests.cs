@@ -108,7 +108,7 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
 
         var list = await (await member.GetAsync("/api/me/garden/plants")).EnsureOk();
         Assert.Equal(1, list[0].GetProperty("reminders").GetArrayLength());
-        Assert.Single(list[0].GetProperty("photos").EnumerateArray());
+        Assert.Empty(list[0].GetProperty("photos").EnumerateArray()); // ảnh cây chỉ lưu trên thiết bị
         Assert.Equal(HttpStatusCode.NotFound, (await (await Member()).Client.GetAsync($"/api/me/garden/plants/{plantId}")).StatusCode);
 
         // Giả lập đến hạn: đặt NextAt về quá khứ rồi chạy job

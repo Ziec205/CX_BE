@@ -20,6 +20,7 @@ public class MyPlant
     public string Name { get; set; } = default!;
     public string? SpeciesId { get; set; }
     public string? SpeciesName { get; set; }
+    /// <summary>Không còn dùng: ảnh cây chỉ lưu trên máy người dùng. Giữ để đọc dữ liệu cũ và dọn ảnh đã tải lên trước đây.</summary>
     public List<string> MediaIds { get; set; } = [];
     public string? Location { get; set; } // vd: Ban công, phòng khách
     public DateTime? AcquiredAt { get; set; }
@@ -48,6 +49,7 @@ public class CareReminder
     public DateTime CreatedAt { get; set; }
 }
 
+/// <param name="MediaIds">Bỏ qua (giữ để app/web cũ gửi lên không lỗi): ảnh cây chỉ lưu trên thiết bị, máy chủ chỉ giữ dữ liệu cây.</param>
 public record PlantRequest(string Name, string? SpeciesId, List<string>? MediaIds, string? Location, DateTime? AcquiredAt, string? Note);
 /// <summary>At: thời điểm giờ-ngày-tháng-năm kèm múi giờ (ISO 8601, vd 2026-10-01T07:30:00+07:00).</summary>
 public record ReminderRequest(ReminderKind Kind, DateTimeOffset At, ReminderRepeat Repeat, int? Interval, string? Note, bool? Enabled);
@@ -114,6 +116,15 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
         ]);
     }
 
+    /// <summary>Ảnh minh họa loài (do quản trị đặt trong danh mục) để hiển thị thay cho ảnh cây.</summary>
+    public async Task<IReadOnlyDictionary<string, string?>> SpeciesImagesAsync(IEnumerable<MyPlant> plants, CancellationToken ct)
+    {
+        var ids = plants.Select(p => p.SpeciesId).OfType<string>().Distinct().ToList();
+        if (ids.Count == 0) return new Dictionary<string, string?>();
+        var list = await catalog.Species.Find(s => ids.Contains(s.Id)).Project(s => new { s.Id, s.ImageUrl }).ToListAsync(ct);
+        return list.ToDictionary(s => s.Id, s => s.ImageUrl);
+    }
+
     public async Task<MyPlant> GetOwnAsync(string userId, string id, CancellationToken ct) =>
         await Plants.Find(p => p.Id == id && p.UserId == userId).FirstOrDefaultAsync(ct) ?? throw DomainException.NotFound("cây");
 
@@ -140,16 +151,12 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
         var name = req.Name?.Trim() ?? "";
         if (name.Length is < 1 or > 80) throw new DomainException("INVALID_NAME", "Tên cây dài 1–80 ký tự");
         if (req.Note?.Length > 2000) throw new DomainException("INVALID_NOTE", "Ghi chú tối đa 2000 ký tự");
-        var mediaIds = req.MediaIds ?? [];
-        if (mediaIds.Count > 10) throw new DomainException("TOO_MANY_PHOTOS", "Tối đa 10 ảnh mỗi cây");
-        await media.GetOwnedAsync(mediaIds, userId, ct);
-        var removed = p.MediaIds.Except(mediaIds).ToList();
-        if (removed.Count > 0) await media.AttachAsync(removed, null!, ct); // ảnh bỏ ra sẽ được job dọn
-        await media.AttachAsync(mediaIds, $"plant:{p.Id}", ct);
+        // Ảnh cây không lưu trên máy chủ nữa: bỏ qua req.MediaIds; ảnh cũ (nếu có) được tách ra để job dọn.
+        if (p.MediaIds.Count > 0) await media.AttachAsync(p.MediaIds, null!, ct);
         p.Name = name;
         p.SpeciesId = string.IsNullOrWhiteSpace(req.SpeciesId) ? null : req.SpeciesId;
         p.SpeciesName = p.SpeciesId is null ? null : (await catalog.GetSpeciesAsync(p.SpeciesId, ct)).CommonName;
-        p.MediaIds = mediaIds;
+        p.MediaIds = [];
         p.Location = req.Location?.Trim();
         p.AcquiredAt = req.AcquiredAt;
         p.Note = req.Note?.Trim();
@@ -186,7 +193,7 @@ public class PlantCareService(IMongoDatabase db, TimeProvider clock, CatalogServ
         var p = await GetOwnAsync(userId, id, ct);
         await Reminders.DeleteManyAsync(r => r.PlantId == id, ct);
         await Plants.DeleteOneAsync(x => x.Id == id, ct);
-        await media.AttachAsync(p.MediaIds, null!, ct);
+        if (p.MediaIds.Count > 0) await media.AttachAsync(p.MediaIds, null!, ct);
     }
 
     public async Task<CareReminder> UpsertReminderAsync(string userId, string plantId, string? reminderId, ReminderRequest req, CancellationToken ct)
@@ -307,17 +314,16 @@ public static class PlantCareEndpoints
             var userId = p.UserId();
             var plants = await svc.Plants.Find(x => x.UserId == userId).SortByDescending(x => x.CreatedAt).ToListAsync(ct);
             var reminders = await svc.Reminders.Find(r => r.UserId == userId).ToListAsync(ct);
-            var mediaIds = plants.SelectMany(x => x.MediaIds).ToList();
-            var items = await media.Items.Find(m => mediaIds.Contains(m.Id)).ToListAsync(ct);
             var locked = await svc.LockedIdsAsync(userId, ct);
-            return plants.Select(x => ToDto(x, reminders.Where(r => r.PlantId == x.Id), items, locked.Contains(x.Id)));
+            var images = await svc.SpeciesImagesAsync(plants, ct);
+            return plants.Select(x => ToDto(x, reminders.Where(r => r.PlantId == x.Id), images, locked.Contains(x.Id)));
         });
         g.MapGet("/plants/{id}", async (string id, ClaimsPrincipal p, PlantCareService svc, MediaService media, CancellationToken ct) =>
         {
             var plant = await svc.GetOwnAsync(p.UserId(), id, ct);
             var reminders = await svc.Reminders.Find(r => r.PlantId == id).ToListAsync(ct);
-            var items = await media.Items.Find(m => plant.MediaIds.Contains(m.Id)).ToListAsync(ct);
-            return ToDto(plant, reminders, items, (await svc.LockedIdsAsync(p.UserId(), ct)).Contains(id));
+            var images = await svc.SpeciesImagesAsync([plant], ct);
+            return ToDto(plant, reminders, images, (await svc.LockedIdsAsync(p.UserId(), ct)).Contains(id));
         });
         g.MapPost("/plants", async (PlantRequest req, ClaimsPrincipal p, PlantCareService svc, CancellationToken ct) =>
             await svc.CreateAsync(p.UserId(), req, ct));
@@ -353,10 +359,11 @@ public static class PlantCareEndpoints
         });
     }
 
-    static object ToDto(MyPlant p, IEnumerable<CareReminder> reminders, List<MediaItem> media, bool locked) => new
+    static object ToDto(MyPlant p, IEnumerable<CareReminder> reminders, IReadOnlyDictionary<string, string?> speciesImages, bool locked) => new
     {
         p.Id, p.Name, p.SpeciesId, p.SpeciesName, p.Location, p.AcquiredAt, p.Note, p.CreatedAt, locked,
-        photos = p.MediaIds.Select(id => media.FirstOrDefault(m => m.Id == id)).Where(m => m is not null).Select(m => MediaService.ToDto(m!)),
+        speciesImageUrl = p.SpeciesId is null ? null : speciesImages.GetValueOrDefault(p.SpeciesId),
+        photos = Array.Empty<object>(), // ảnh cây nằm trên thiết bị; giữ trường rỗng cho bản app/web cũ
         reminders = reminders.OrderBy(r => r.NextAt ?? DateTime.MaxValue),
     };
 }

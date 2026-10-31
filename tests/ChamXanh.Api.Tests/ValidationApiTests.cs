@@ -37,13 +37,17 @@ public class ValidationApiTests(MongoFixture mongo) : ApiTestBase(mongo)
     }
 
     [Fact]
-    public async Task Plant_with_someone_elses_photo_is_rejected()
+    public async Task Plant_photos_are_not_stored_on_server()
     {
         var (other, _) = await Member();
         var form = new MultipartFormDataContent { { new ByteArrayContent(TestImages.Jpeg()), "file", "a.jpg" } };
         var photo = (await (await other.PostAsync("/api/media", form)).EnsureOk()).GetProperty("id").GetString();
         var (c, _) = await Member();
-        Assert.Equal("INVALID_MEDIA", await (await c.PostAsJsonAsync("/api/me/garden/plants", new { name = "Sen đá", mediaIds = new[] { photo } })).ErrorCode());
+        // App/web cũ còn gửi mediaIds: vẫn tạo được cây nhưng máy chủ không giữ ảnh.
+        var plant = await (await c.PostAsJsonAsync("/api/me/garden/plants", new { name = "Sen đá", mediaIds = new[] { photo } })).EnsureOk();
+        Assert.Empty(plant.GetProperty("mediaIds").EnumerateArray());
+        var got = await (await c.GetAsync($"/api/me/garden/plants/{plant.GetProperty("id").GetString()}")).EnsureOk();
+        Assert.Empty(got.GetProperty("photos").EnumerateArray());
     }
 
     [Theory]

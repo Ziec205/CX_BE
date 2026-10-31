@@ -18,7 +18,7 @@ public static class PlanEndpoints
 
     static object PaymentDto(PlanPayment p) => new
     {
-        p.Id, plan = p.Plan.ToString(), p.Months, p.AmountVnd, p.OrderCode, p.Gateway, p.CheckoutUrl, status = p.Status.ToString(),
+        p.Id, plan = p.Plan.ToString(), p.Months, p.AmountVnd, p.OrderCode, p.Gateway, p.CheckoutUrl, p.QrCode, status = p.Status.ToString(),
         p.CreatedAt, p.ExpiresAt, p.PaidAt, appliedPlan = p.AppliedPlan?.ToString(), p.AppliedEndAt,
     };
 

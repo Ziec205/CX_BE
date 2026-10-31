@@ -63,6 +63,8 @@ public class Species
     public int? Difficulty { get; set; }
     public string? PetToxicity { get; set; }
     public string? Description { get; set; }
+    /// <summary>Ảnh minh họa loài (URL https), dùng làm ảnh đại diện cho cây trong Hồ sơ vườn.</summary>
+    public string? ImageUrl { get; set; }
     [BsonRepresentation(BsonType.String)] public LegalFlag LegalFlag { get; set; }
     public string? LegalBasis { get; set; }
     public List<PriceRef> PriceRefs { get; set; } = [];

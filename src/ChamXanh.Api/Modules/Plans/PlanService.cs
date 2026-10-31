@@ -60,6 +60,7 @@ public class PlanService(IMongoDatabase db, IMongoClient client, IPlanPaymentGat
             payment.ExpiresAt, web), ct);
         payment.PaymentLinkId = link.PaymentLinkId;
         payment.CheckoutUrl = link.CheckoutUrl;
+        payment.QrCode = link.QrCode;
         await Payments.InsertOneAsync(payment, cancellationToken: ct);
         return payment;
     }
