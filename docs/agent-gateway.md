@@ -15,7 +15,7 @@ POST /api/admin/agent-tokens
 
 Để cấp toàn quyền, thay `permissions` bằng `"allPermissions": true`. Hạn dùng từ 1 đến 365 ngày, mặc định 90.
 
-Token gốc (`cxa_...`) chỉ hiện một lần trong phản hồi. Máy chủ chỉ lưu SHA-256 của token.
+Máy chủ xác thực bằng SHA-256 của token và lưu thêm bản mã hóa để admin xem lại bằng nút con mắt. Mỗi lần xem cần quyền `admin.manage` và được ghi audit; thu hồi sẽ xóa bản mã hóa.
 
 ## Kết nối Claude Code
 

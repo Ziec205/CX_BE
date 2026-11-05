@@ -27,6 +27,8 @@ public class AgentToken
 {
     [BsonId, BsonRepresentation(BsonType.ObjectId)] public string Id { get; set; } = ObjectId.GenerateNewId().ToString();
     public string Hash { get; set; } = default!;
+    /// <summary>Token gốc mã hóa để admin xem lại; xóa khi thu hồi. Xác thực vẫn dùng Hash.</summary>
+    public string? EncryptedToken { get; set; }
     public string Name { get; set; } = default!;
     public List<string> Permissions { get; set; } = [];
     public string CreatedBy { get; set; } = default!;
@@ -72,7 +74,7 @@ file sealed class HasBody : Microsoft.AspNetCore.Http.Features.IHttpRequestBodyD
 /// <summary>Đường ống HTTP của ứng dụng, dùng để chạy lời gọi nội bộ của admin_api_call.</summary>
 public class AdminPipeline { public RequestDelegate? Next { get; set; } }
 
-public class AgentTokenService(IMongoDatabase db, TimeProvider clock)
+public class AgentTokenService(IMongoDatabase db, TimeProvider clock, DataProtector protector)
 {
     public static readonly string[] Allowed = Perm.All;
     public IMongoCollection<AgentToken> Tokens { get; } = db.GetCollection<AgentToken>("agentTokens");
@@ -82,6 +84,15 @@ public class AgentTokenService(IMongoDatabase db, TimeProvider clock)
 
     static string HashOf(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
+    /// <summary>Token gốc của token còn hiệu lực; token tạo trước khi có mã hóa thì không xem lại được.</summary>
+    public async Task<string> RevealAsync(string id, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow().UtcDateTime;
+        var t = await Tokens.Find(x => x.Id == id && x.RevokedAt == null && x.ExpiresAt > now).FirstOrDefaultAsync(ct) ?? throw DomainException.NotFound("token");
+        if (t.EncryptedToken is null) throw DomainException.Conflict("TOKEN_NOT_RECOVERABLE", "Token này tạo trước khi có tính năng xem lại. Hãy thu hồi và tạo token mới.");
+        return protector.Decrypt(t.EncryptedToken);
+    }
+
     public async Task<(AgentToken Saved, string Plain)> CreateAsync(CreateAgentTokenRequest req, string createdBy, CancellationToken ct)
     {
         var name = req.Name?.Trim() ?? "";
@@ -90,10 +101,12 @@ public class AgentTokenService(IMongoDatabase db, TimeProvider clock)
         if (perms.Count == 0) throw new DomainException("PERMISSIONS_REQUIRED", "Hãy chọn quyền cho token, hoặc đặt allPermissions = true");
         if (perms.Except(Allowed).Any()) throw new DomainException("PERMISSION_NOT_ALLOWED", "Có quyền không tồn tại");
         var now = clock.GetUtcNow().UtcDateTime;
+        var sameName = Builders<AgentToken>.Filter.Regex(x => x.Name, new BsonRegularExpression($"^{System.Text.RegularExpressions.Regex.Escape(name)}$", "i")) & Builders<AgentToken>.Filter.Eq(x => x.RevokedAt, null);
+        if (await Tokens.Find(sameName).AnyAsync(ct)) throw DomainException.Conflict("TOKEN_NAME_TAKEN", "Tên token đã được dùng. Hãy chọn tên khác hoặc thu hồi token cũ.");
         var plain = "cxa_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
         var saved = new AgentToken
         {
-            Hash = HashOf(plain), Name = name, Permissions = perms, CreatedBy = createdBy, CreatedAt = now,
+            Hash = HashOf(plain), EncryptedToken = protector.Encrypt(plain), Name = name, Permissions = perms, CreatedBy = createdBy, CreatedAt = now,
             ExpiresAt = now.AddDays(Math.Clamp(req.Days ?? 90, 1, 365)),
         };
         await Tokens.InsertOneAsync(saved, cancellationToken: ct);
@@ -304,7 +317,14 @@ public static class AgentGatewayEndpoints
         var admin = app.MapGroup("/api/admin/agent-tokens").WithTags("Admin Agent").RequireAuthorization(Policies.ForPerm(Perm.AdminManage));
         admin.MapGet("/", async (AgentTokenService svc, CancellationToken ct) =>
             (await svc.Tokens.Find(Builders<AgentToken>.Filter.Empty).SortByDescending(t => t.CreatedAt).Limit(100).ToListAsync(ct))
-            .Select(t => new { t.Id, t.Name, t.Permissions, t.CreatedAt, t.ExpiresAt, t.RevokedAt, t.LastUsedAt }));
+            .Select(t => new { t.Id, t.Name, t.Permissions, t.CreatedAt, t.ExpiresAt, t.RevokedAt, t.LastUsedAt, canReveal = t.EncryptedToken != null }));
+        admin.MapPost("/{id}/reveal", async (string id, HttpContext http, ClaimsPrincipal p, AgentTokenService svc, AuditService audit, CancellationToken ct) =>
+        {
+            var token = await svc.RevealAsync(id, ct);
+            await audit.LogAsync(p, "agent_token.reveal", "agent_token", id, ct: ct);
+            http.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(new { token });
+        });
         admin.MapPost("/", async (CreateAgentTokenRequest req, ClaimsPrincipal p, AgentTokenService svc, AuditService audit, CancellationToken ct) =>
         {
             var (t, plain) = await svc.CreateAsync(req, p.UserId(), ct);
@@ -314,7 +334,7 @@ public static class AgentGatewayEndpoints
         admin.MapDelete("/{id}", async (string id, ClaimsPrincipal p, AgentTokenService svc, AuditService audit, TimeProvider clock, CancellationToken ct) =>
         {
             var res = await svc.Tokens.UpdateOneAsync(t => t.Id == id && t.RevokedAt == null,
-                Builders<AgentToken>.Update.Set(t => t.RevokedAt, clock.GetUtcNow().UtcDateTime), cancellationToken: ct);
+                Builders<AgentToken>.Update.Set(t => t.RevokedAt, clock.GetUtcNow().UtcDateTime).Set(t => t.EncryptedToken, null), cancellationToken: ct);
             if (res.MatchedCount == 0) throw DomainException.NotFound("token");
             await audit.LogAsync(p, "agent_token.revoke", "agent_token", id, ct: ct);
             return Results.NoContent();

@@ -181,4 +181,20 @@ public class AgentGatewayTests(MongoFixture mongo) : ApiTestBase(mongo)
         var (_, token) = await NewToken(new { name = "ngoài admin", allPermissions = true });
         Assert.Equal(HttpStatusCode.Unauthorized, (await WithToken(token).GetAsync("/api/me")).StatusCode);
     }
+
+    [Fact]
+    public async Task Names_are_unique_among_active_tokens_and_reveal_stops_after_revoke()
+    {
+        var name = "trùng " + Guid.NewGuid().ToString("N")[..8];
+        var (id, token) = await NewToken(new { name, permissions = new[] { Perm.ContentManage } });
+        var admin = await SuperAdmin();
+        Assert.Equal(HttpStatusCode.Conflict, (await admin.PostAsJsonAsync("/api/admin/agent-tokens", new { name = name.ToUpperInvariant(), permissions = new[] { Perm.ContentManage } })).StatusCode);
+
+        var shown = await (await admin.PostAsync($"/api/admin/agent-tokens/{id}/reveal", null)).EnsureOk();
+        Assert.Equal(token, shown.GetProperty("token").GetString());
+
+        (await admin.DeleteAsync($"/api/admin/agent-tokens/{id}")).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.PostAsync($"/api/admin/agent-tokens/{id}/reveal", null)).StatusCode);
+        (await admin.PostAsJsonAsync("/api/admin/agent-tokens", new { name, permissions = new[] { Perm.ContentManage } })).EnsureSuccessStatusCode();
+    }
 }
