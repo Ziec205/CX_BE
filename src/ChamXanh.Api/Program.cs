@@ -1,3 +1,4 @@
+using ChamXanh.Api.Modules.Agent;
 using System.Text.Json.Serialization;
 using ChamXanh.Api.Common;
 using ChamXanh.Api.Common.Auth;
@@ -57,7 +58,10 @@ if (authOptions.JwtKey.Length < 32) throw new InvalidOperationException("Auth:Jw
 services.AddSingleton(authOptions);
 services.AddScoped<TokenService>();
 services.AddStartupTask((sp, _) => sp.GetRequiredService<TokenService>().EnsureIndexesAsync());
-services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
+services.AddAuthentication(AgentAuth.SmartScheme)
+    .AddPolicyScheme(AgentAuth.SmartScheme, null, o => o.ForwardDefaultSelector = AgentAuth.SelectScheme)
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, AgentAuthHandler>(AgentAuth.Scheme, null)
+    .AddJwtBearer(o =>
 {
     o.MapInboundClaims = false;
     o.TokenValidationParameters = new TokenValidationParameters
@@ -229,6 +233,10 @@ if (emailOptions.IsConfigured) services.AddSingleton<IEmailSender, SmtpEmailSend
 else services.AddSingleton<IEmailSender, LogEmailSender>();
 services.AddScoped<PlantCareService>();
 services.AddScoped<ExploreService>();
+services.AddScoped<ChamXanh.Api.Modules.Agent.AgentTokenService>();
+services.AddScoped<ChamXanh.Api.Modules.Agent.AgentTools>();
+services.AddSingleton<AdminPipeline>();
+services.AddStartupTask((sp, _) => sp.GetRequiredService<ChamXanh.Api.Modules.Agent.AgentTokenService>().EnsureIndexesAsync());
 services.AddHostedService<CareReminderWorker>();
 services.AddStartupTask(async (sp, _) =>
 {
@@ -247,6 +255,10 @@ services.AddCors(o => o.AddDefaultPolicy(p => p
     .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 
 var app = builder.Build();
+
+// Lưu đường ống phía sau để công cụ admin_api_call đi qua đúng xác thực, phân quyền và xử lý lỗi của API.
+app.Use(next => { app.Services.GetRequiredService<AdminPipeline>().Next = next; return next; });
+app.UseRouting();
 
 app.UseExceptionHandler();
 app.UseCors();
@@ -273,6 +285,7 @@ app.MapPricing();
 app.MapNotifications();
 app.MapPlantCare();
 app.MapExplore();
+ChamXanh.Api.Modules.Agent.AgentGatewayEndpoints.MapAgentGateway(app);
 app.MapFeatureFlags();
 app.MapCommunity();
 app.MapAi();
