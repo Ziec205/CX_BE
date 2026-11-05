@@ -45,6 +45,10 @@ public class CareReminder
     public int Interval { get; set; } = 1;
     public DateTime? NextAt { get; set; }
     public DateTime? LastFiredAt { get; set; }
+    /// <summary>Lần người dùng bấm "Đã tưới/Đã làm" (trên app hoặc web) — để hai nơi hiện giống nhau.</summary>
+    public DateTime? LastDoneAt { get; set; }
+    /// <summary>Giá trị trước đó của LastDoneAt, để "Hoàn tác" khi bấm nhầm.</summary>
+    public DateTime? PreviousDoneAt { get; set; }
     public bool Enabled { get; set; } = true;
     public DateTime CreatedAt { get; set; }
 }
@@ -344,6 +348,28 @@ public static class PlantCareEndpoints
             var userId = p.UserId();
             await svc.Reminders.DeleteOneAsync(r => r.Id == rid && r.PlantId == id && r.UserId == userId, ct);
             return Results.NoContent();
+        });
+        // Đánh dấu đã làm (app: nút "Đã tưới" trên thông báo/Hôm nay; web: nút "Đã làm"). DELETE = hoàn tác.
+        g.MapPost("/plants/{id}/reminders/{rid}/done", async (string id, string rid, ClaimsPrincipal p, PlantCareService svc, TimeProvider clock, CancellationToken ct) =>
+        {
+            var userId = p.UserId();
+            var r = await svc.Reminders.Find(x => x.Id == rid && x.PlantId == id && x.UserId == userId).FirstOrDefaultAsync(ct) ?? throw DomainException.NotFound("lời nhắc");
+            var now = clock.GetUtcNow().UtcDateTime;
+            await svc.Reminders.UpdateOneAsync(x => x.Id == rid,
+                Builders<CareReminder>.Update.Set(x => x.PreviousDoneAt, r.LastDoneAt).Set(x => x.LastDoneAt, now), cancellationToken: ct);
+            r.PreviousDoneAt = r.LastDoneAt;
+            r.LastDoneAt = now;
+            return r;
+        });
+        g.MapDelete("/plants/{id}/reminders/{rid}/done", async (string id, string rid, ClaimsPrincipal p, PlantCareService svc, CancellationToken ct) =>
+        {
+            var userId = p.UserId();
+            var r = await svc.Reminders.Find(x => x.Id == rid && x.PlantId == id && x.UserId == userId).FirstOrDefaultAsync(ct) ?? throw DomainException.NotFound("lời nhắc");
+            await svc.Reminders.UpdateOneAsync(x => x.Id == rid,
+                Builders<CareReminder>.Update.Set(x => x.LastDoneAt, r.PreviousDoneAt).Set(x => x.PreviousDoneAt, null), cancellationToken: ct);
+            r.LastDoneAt = r.PreviousDoneAt;
+            r.PreviousDoneAt = null;
+            return r;
         });
         // Lịch sắp tới của cả vườn (mặc định 7 ngày).
         g.MapGet("/upcoming", async (int? days, ClaimsPrincipal p, PlantCareService svc, TimeProvider clock, CancellationToken ct) =>

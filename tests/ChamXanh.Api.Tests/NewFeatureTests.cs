@@ -106,8 +106,17 @@ public class NewFeatureTests(MongoFixture mongo) : ApiTestBase(mongo)
             new { kind = "Watering", at, repeat = "Daily", note = "Tưới 200ml" })).EnsureOk();
         var rid = reminder.GetProperty("id").GetString()!;
 
+        // Bấm "Đã tưới" (app hoặc web) → hai nơi cùng thấy; hoàn tác trả lại giá trị cũ
+        var done = await (await member.PostAsync($"/api/me/garden/plants/{plantId}/reminders/{rid}/done", null)).EnsureOk();
+        Assert.NotEqual(JsonValueKind.Null, done.GetProperty("lastDoneAt").ValueKind);
+        var undone = await (await member.DeleteAsync($"/api/me/garden/plants/{plantId}/reminders/{rid}/done")).EnsureOk();
+        Assert.Equal(JsonValueKind.Null, undone.GetProperty("lastDoneAt").ValueKind);
+        Assert.Equal(HttpStatusCode.NotFound, (await (await Member()).Client.PostAsync($"/api/me/garden/plants/{plantId}/reminders/{rid}/done", null)).StatusCode);
+        await member.PostAsync($"/api/me/garden/plants/{plantId}/reminders/{rid}/done", null);
+
         var list = await (await member.GetAsync("/api/me/garden/plants")).EnsureOk();
         Assert.Equal(1, list[0].GetProperty("reminders").GetArrayLength());
+        Assert.NotEqual(JsonValueKind.Null, list[0].GetProperty("reminders")[0].GetProperty("lastDoneAt").ValueKind);
         Assert.Empty(list[0].GetProperty("photos").EnumerateArray()); // ảnh cây chỉ lưu trên thiết bị
         Assert.Equal(HttpStatusCode.NotFound, (await (await Member()).Client.GetAsync($"/api/me/garden/plants/{plantId}")).StatusCode);
 
