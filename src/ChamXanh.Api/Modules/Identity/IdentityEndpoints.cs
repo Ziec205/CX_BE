@@ -99,6 +99,7 @@ public static class IdentityEndpoints
                 try { var phone = PhoneNumber.Normalize(q); u = await users.Users.Find(x => x.Phone == phone).FirstOrDefaultAsync(ct); }
                 catch (Common.DomainException) { }
             }
+            if (u is null) { var name = q.Trim().ToLowerInvariant(); u = await users.Users.Find(x => x.Username == name).FirstOrDefaultAsync(ct); }
             return u is null ? Results.NotFound() : Results.Ok(new { u.Id, u.Phone, u.DisplayName, u.FullName, Status = u.Status.ToString(), u.ActiveViolationPoints, u.CreatedAt });
         }).WithTags("Admin Users").RequireAuthorization(p => p
             .RequireClaim(Claims.Kind, Claims.Admin).RequireClaim(Claims.Mfa, "true")

@@ -24,6 +24,42 @@ public static class PlanEndpoints
 
     public static void MapPlans(this IEndpointRouteBuilder app)
     {
+        // Đối soát: xem mọi đơn mua gói, chỉ đọc.
+        app.MapGet("/api/admin/plans/payments", async (PlanPaymentStatus? status, PlanCode? plan, string? q, int? page, PlanService plans, ChamXanh.Api.Modules.Identity.UserService users, CancellationToken ct) =>
+        {
+            var b = Builders<PlanPayment>.Filter;
+            var f = b.Empty;
+            if (status is { } st) f &= b.Eq(x => x.Status, st);
+            if (plan is { } pl) f &= b.Eq(x => x.Plan, pl);
+            var term = q?.Trim();
+            if (!string.IsNullOrEmpty(term))
+            {
+                if (long.TryParse(term, out var order)) f &= b.Eq(x => x.OrderCode, order);
+                else
+                {
+                    var byId = MongoDB.Bson.ObjectId.TryParse(term, out _);
+                    var lower = term.ToLowerInvariant();
+                    var u = await users.Users.Find(x => x.Username == lower || x.Username == term || (byId && x.Id == term)).FirstOrDefaultAsync(ct);
+                    f &= b.Eq(x => x.UserId, u?.Id ?? "");
+                }
+            }
+            const int size = 20;
+            var pageNo = Math.Max(1, page ?? 1);
+            var list = await plans.Payments.Find(f).SortByDescending(x => x.CreatedAt).Skip((pageNo - 1) * size).Limit(size).ToListAsync(ct);
+            var total = await plans.Payments.CountDocumentsAsync(f, cancellationToken: ct);
+            var ids = list.Select(x => x.UserId).Distinct().ToList();
+            var names = await users.Users.Find(u => ids.Contains(u.Id)).Project(u => new { u.Id, u.DisplayName }).ToListAsync(ct);
+            return new
+            {
+                items = list.Select(x => new
+                {
+                    x.Id, x.UserId, userName = names.FirstOrDefault(n => n.Id == x.UserId)?.DisplayName, plan = x.Plan.ToString(), x.Months, x.AmountVnd, x.OrderCode, x.Gateway,
+                    status = x.Status.ToString(), x.CreatedAt, x.PaidAt, x.AppliedEndAt,
+                }),
+                total, page = pageNo, pageSize = size,
+            };
+        }).WithTags("Admin Plans").RequireAuthorization(ChamXanh.Api.Common.Auth.Policies.ForPerm(ChamXanh.Api.Common.Auth.Perm.ReportsView));
+
         app.MapGet("/api/plans", (IPlanPaymentGateway gateway) => new
         {
             plans = PlanCatalog.All.Select(PlanDto), terms = PlanCatalog.Terms, simulator = gateway.IsSimulator,

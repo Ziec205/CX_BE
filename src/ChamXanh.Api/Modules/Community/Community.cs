@@ -154,6 +154,7 @@ public class CommunityService(IMongoDatabase db, TimeProvider clock, UserService
         if (p.AuthorId != userId) throw DomainException.Forbidden("Chỉ tác giả sửa được bài");
         var (title, body) = Validate(req);
         await RequireAuthorAsync(userId, title + " " + body, ct);
+        if (req.Type == PostType.Showcase && (req.MediaIds?.Count ?? 0) == 0) throw new DomainException("PHOTO_REQUIRED", "Bài khoe cây cần ít nhất 1 ảnh");
         Apply(p, req, title, body);
         p.MediaIds = await OwnedMediaAsync(req.MediaIds, userId, 10, $"post:{p.Id}", ct);
         await Posts.ReplaceOneAsync(x => x.Id == id, p, cancellationToken: ct);
@@ -197,6 +198,17 @@ public class CommunityService(IMongoDatabase db, TimeProvider clock, UserService
         if (p.AuthorId != userId)
             await notifications.SendAsync(p.AuthorId, "community.comment", p.Type == PostType.Question ? "Có câu trả lời mới" : "Có bình luận mới", p.Title, $"/cong-dong/{p.Id}", ct);
         return c;
+    }
+
+    /// <summary>Số bình luận chỉ tính bình luận đang hiện; câu trả lời hay nhất không còn hiện thì bỏ chọn để người hỏi chọn lại.</summary>
+    public async Task SyncCommentStateAsync(string postId, CancellationToken ct)
+    {
+        var count = await Comments.CountDocumentsAsync(c => c.PostId == postId && c.Status == PostStatus.Visible, cancellationToken: ct);
+        await Posts.UpdateOneAsync(x => x.Id == postId, Builders<Post>.Update.Set(x => x.Comments, (int)count), cancellationToken: ct);
+        var bestId = await Posts.Find(x => x.Id == postId).Project(x => x.BestCommentId).FirstOrDefaultAsync(ct);
+        if (bestId is null || await Comments.Find(c => c.Id == bestId && c.Status == PostStatus.Visible).AnyAsync(ct)) return;
+        await Comments.UpdateOneAsync(c => c.Id == bestId, Builders<Comment>.Update.Set(c => c.IsBest, false), cancellationToken: ct);
+        await Posts.UpdateOneAsync(x => x.Id == postId && x.BestCommentId == bestId, Builders<Post>.Update.Set(x => x.BestCommentId, null), cancellationToken: ct);
     }
 
     /// <summary>Tác giả câu hỏi chọn câu trả lời hay nhất (+10 điểm cho người trả lời).</summary>
@@ -267,8 +279,11 @@ public class CommunityService(IMongoDatabase db, TimeProvider clock, UserService
             var res = await Comments.UpdateOneAsync(x => x.Id == targetId && !x.ReportedBy.Contains(userId),
                 Builders<Comment>.Update.AddToSet(x => x.ReportedBy, userId).Inc(x => x.ReportCount, 1), cancellationToken: ct);
             if (res.ModifiedCount > 0)
-                await Comments.UpdateOneAsync(x => x.Id == targetId && x.ReportCount >= HideAtReports && x.Status == PostStatus.Visible,
+            {
+                var hidden = await Comments.FindOneAndUpdateAsync<Comment>(x => x.Id == targetId && x.ReportCount >= HideAtReports && x.Status == PostStatus.Visible,
                     Builders<Comment>.Update.Set(x => x.Status, PostStatus.Hidden), cancellationToken: ct);
+                if (hidden is not null) await SyncCommentStateAsync(hidden.PostId, ct);
+            }
             return;
         }
         var r = await Posts.UpdateOneAsync(x => x.Id == targetId && !x.ReportedBy.Contains(userId),
@@ -315,7 +330,7 @@ public static class CommunityEndpoints
                 foreach (var word in VietnameseText.Normalize(q).Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(6))
                     filter &= f.Regex(p => p.SearchText, new BsonRegularExpression(Regex.Escape(word)));
             if (sort == "unanswered") filter &= f.Eq(p => p.Type, PostType.Question) & f.Eq(p => p.Comments, 0);
-            var pageNo = Math.Max(1, page ?? 1);
+            var pageNo = Math.Clamp(page ?? 1, 1, 100_000);
             var find = svc.Posts.Find(filter);
             find = sort == "top" ? find.SortByDescending(p => p.Likes).ThenByDescending(p => p.CreatedAt) : find.SortByDescending(p => p.LastActivityAt);
             var list = await find.Skip((pageNo - 1) * 20).Limit(20).ToListAsync(ct);
@@ -385,7 +400,7 @@ public static class CommunityEndpoints
             var userId = p.UserId();
             var c = await svc.Comments.FindOneAndUpdateAsync<Comment>(x => x.Id == id && x.AuthorId == userId && x.Status == PostStatus.Visible,
                 Builders<Comment>.Update.Set(x => x.Status, PostStatus.Removed), cancellationToken: ct) ?? throw DomainException.NotFound("bình luận");
-            await svc.Posts.UpdateOneAsync(x => x.Id == c.PostId, Builders<Post>.Update.Inc(x => x.Comments, -1), cancellationToken: ct);
+            await svc.SyncCommentStateAsync(c.PostId, ct);
             return Results.NoContent();
         });
         g.MapPost("/posts/{id}/best/{commentId}", async (string id, string commentId, ClaimsPrincipal p, CommunityService svc, CancellationToken ct) =>
@@ -415,11 +430,35 @@ public static class CommunityEndpoints
             posts = await svc.Posts.Find(p => p.ReportCount > 0 && p.Status != PostStatus.Removed || p.Status == PostStatus.Hidden).SortByDescending(p => p.ReportCount).Limit(100).ToListAsync(ct),
             comments = await svc.Comments.Find(c => c.ReportCount > 0 && c.Status != PostStatus.Removed).SortByDescending(c => c.ReportCount).Limit(100).ToListAsync(ct),
         });
+        // Toàn bộ bài (không chỉ bài bị báo cáo) để tìm và ẩn/gỡ chủ động.
+        admin.MapGet("/posts", async (string? q, PostStatus? status, int? page, CommunityService svc, UserService users, CancellationToken ct) =>
+        {
+            var f = Builders<Post>.Filter.Empty;
+            if (status is { } st) f &= Builders<Post>.Filter.Eq(x => x.Status, st);
+            if (!string.IsNullOrWhiteSpace(q))
+                f &= Builders<Post>.Filter.Regex(x => x.Title, new MongoDB.Bson.BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(q.Trim()), "i"));
+            const int size = 20;
+            var pageNo = Math.Max(1, page ?? 1);
+            var list = await svc.Posts.Find(f).SortByDescending(x => x.CreatedAt).Skip((pageNo - 1) * size).Limit(size).ToListAsync(ct);
+            var total = await svc.Posts.CountDocumentsAsync(f, cancellationToken: ct);
+            var ids = list.Select(x => x.AuthorId).Distinct().ToList();
+            var names = await users.Users.Find(u => ids.Contains(u.Id)).Project(u => new { u.Id, u.DisplayName }).ToListAsync(ct);
+            return new
+            {
+                items = list.Select(x => new
+                {
+                    x.Id, type = x.Type.ToString(), x.Title, x.Body, x.AuthorId, authorName = names.FirstOrDefault(n => n.Id == x.AuthorId)?.DisplayName,
+                    status = x.Status.ToString(), x.ReportCount, x.SaleFlag, x.CreatedAt,
+                }),
+                total, page = pageNo, pageSize = size,
+            };
+        });
         admin.MapPost("/posts/{id}/moderate", async (string id, ModeratePostRequest req, ClaimsPrincipal p, CommunityService svc, AuditService audit, CancellationToken ct) =>
         {
             var u = Builders<Post>.Update.Set(x => x.Status, req.Status);
             if (req.Status == PostStatus.Visible) u = u.Set(x => x.ReportCount, 0).Set(x => x.ReportedBy, []);
-            await svc.Posts.UpdateOneAsync(x => x.Id == id, u, cancellationToken: ct);
+            var res = await svc.Posts.UpdateOneAsync(x => x.Id == id, u, cancellationToken: ct);
+            if (res.MatchedCount == 0) throw DomainException.NotFound("bài viết");
             await audit.LogAsync(p, "community.moderate_post", "post", id, after: new { req.Status }, reason: req.Reason, ct: ct);
             return Results.NoContent();
         });
@@ -427,7 +466,9 @@ public static class CommunityEndpoints
         {
             var u = Builders<Comment>.Update.Set(x => x.Status, req.Status);
             if (req.Status == PostStatus.Visible) u = u.Set(x => x.ReportCount, 0).Set(x => x.ReportedBy, []);
-            await svc.Comments.UpdateOneAsync(x => x.Id == id, u, cancellationToken: ct);
+            var c = await svc.Comments.FindOneAndUpdateAsync<Comment>(x => x.Id == id, u, cancellationToken: ct);
+            if (c is null) throw DomainException.NotFound("bình luận");
+            await svc.SyncCommentStateAsync(c.PostId, ct);
             await audit.LogAsync(p, "community.moderate_comment", "comment", id, after: new { req.Status }, reason: req.Reason, ct: ct);
             return Results.NoContent();
         });

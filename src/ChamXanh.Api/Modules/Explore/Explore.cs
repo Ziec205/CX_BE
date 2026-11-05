@@ -109,7 +109,7 @@ public static class ExploreEndpoints
         pub.MapGet("/", async (int? page, int? pageSize, ExploreService svc, CancellationToken ct) =>
         {
             var size = Math.Clamp(pageSize ?? 12, 1, 50);
-            var p = Math.Max(1, page ?? 1);
+            var p = Math.Clamp(page ?? 1, 1, 100_000);
             var filter = svc.Visible();
             var list = await svc.Articles.Find(filter).SortByDescending(a => a.PublishAt).Skip((p - 1) * size).Limit(size).ToListAsync(ct);
             var total = await svc.Articles.CountDocumentsAsync(filter, cancellationToken: ct);

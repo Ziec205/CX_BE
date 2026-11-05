@@ -96,13 +96,15 @@ public static class AccountLifecycleEndpoints
                 try { phone = PhoneNumber.Normalize(term); } catch (DomainException) { }
                 f &= phone is not null ? Builders<User>.Filter.Eq(u => u.Phone, phone)
                     : MongoDB.Bson.ObjectId.TryParse(term, out _) ? Builders<User>.Filter.Eq(u => u.Id, term)
-                    : Builders<User>.Filter.Regex(u => u.DisplayName, new MongoDB.Bson.BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(term), "i"));
+                    : Builders<User>.Filter.Or(
+                        Builders<User>.Filter.Regex(u => u.DisplayName, new MongoDB.Bson.BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(term), "i")),
+                        Builders<User>.Filter.Regex(u => u.Username, new MongoDB.Bson.BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(term), "i")));
             }
             var pageNo = Math.Max(1, page ?? 1);
             var list = await users.Users.Find(f).SortByDescending(u => u.CreatedAt).Skip((pageNo - 1) * 50).Limit(50).ToListAsync(ct);
             return list.Select(u => new
             {
-                u.Id, phone = (u.Phone is null ? null : DataProtector.MaskTail(u.Phone, 3)), u.DisplayName, u.FullName, u.ProvinceId, u.Status,
+                u.Id, u.Username, phone = (u.Phone is null ? null : DataProtector.MaskTail(u.Phone, 3)), u.DisplayName, u.FullName, u.ProvinceId, u.Status,
                 u.ActiveViolationPoints, u.PostingRestrictedUntil, u.LockedUntil, u.CreatedAt, u.LastSeenAt,
             });
         });
